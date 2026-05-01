@@ -1,4 +1,4 @@
-.PHONY: help deps compile test test.watch iex run seed stop open play clean fmt
+.PHONY: help deps compile test test.watch iex run seed dev stop open play clean fmt
 
 PORT ?= 4000
 URL  := http://127.0.0.1:$(PORT)
@@ -34,6 +34,11 @@ seed: stop ## boot the dashboard with alice/bob (awake) and clarice (asleep)
 		{:ok, _} = Urchin.spawn_mind("clarice"); \
 		Urchin.Mind.sleep("clarice")' &
 	@echo "==> backgrounded — \`make stop\` to kill, \`make open\` to view"
+
+dev: stop ## full dev: stub LLM if no API key, seed minds, run demo, open browser. Ctrl-C to quit.
+	@echo "==> dev mode at $(URL) — opening browser in 3s, Ctrl-C to quit"
+	@(sleep 3 && open $(URL) 2>/dev/null || xdg-open $(URL) 2>/dev/null) &
+	@elixir --no-halt -S mix run dev/seed.exs
 
 stop: ## kill any process listening on $$PORT
 	@pid=$$(lsof -t -iTCP:$(PORT) -sTCP:LISTEN 2>/dev/null); \
