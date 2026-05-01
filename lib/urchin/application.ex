@@ -5,12 +5,24 @@ defmodule Urchin.Application do
 
   @impl true
   def start(_type, _args) do
+    topologies = Application.get_env(:libcluster, :topologies, [])
+
     children = [
-      {Registry, keys: :unique, name: Urchin.Registry},
-      {DynamicSupervisor, name: Urchin.MindSupervisor, strategy: :one_for_one}
+      {Cluster.Supervisor, [topologies, [name: Urchin.ClusterSupervisor]]},
+      {Phoenix.PubSub, name: Urchin.PubSub},
+      {Horde.Registry, name: Urchin.Registry, keys: :unique, members: :auto},
+      {Horde.DynamicSupervisor,
+       name: Urchin.MindSupervisor, strategy: :one_for_one, members: :auto},
+      Urchin.LLM.Throttle,
+      Urchin.Budget,
+      {Finch, name: Urchin.Finch},
+      Urchin.NodeObserver,
+      Urchin.Telemetry,
+      Urchin.Web.TelemetryRelay,
+      Urchin.Web.Endpoint
     ]
 
-    opts = [strategy: :one_for_one, name: Urchin.Supervisor]
+    opts = [strategy: :rest_for_one, name: Urchin.Supervisor]
     Supervisor.start_link(children, opts)
   end
 end

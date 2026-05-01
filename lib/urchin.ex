@@ -1,5 +1,5 @@
 defmodule Urchin do
   def spawn_mind(id) do
-    DynamicSupervisor.start_child(Urchin.MindSupervisor, {Urchin.Mind, id})
+    Horde.DynamicSupervisor.start_child(Urchin.MindSupervisor, Urchin.Mind.child_spec(id))
   end
 end

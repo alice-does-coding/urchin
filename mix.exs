@@ -21,7 +21,19 @@ defmodule Urchin.MixProject do
   defp deps do
     [
       {:req, "~> 0.5"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:finch, "~> 0.18"},
+      {:telemetry, "~> 1.2"},
+      {:phoenix_pubsub, "~> 2.1"},
+      {:horde, "~> 0.9"},
+      {:libcluster, "~> 3.4"},
+      {:phoenix, "~> 1.7"},
+      {:phoenix_live_view, "~> 1.0"},
+      {:phoenix_html, "~> 4.1"},
+      {:phoenix_template, "~> 1.0"},
+      {:bandit, "~> 1.5"},
+      {:plug, "~> 1.16"},
+      {:lazy_html, ">= 0.1.0", only: :test}
     ]
   end
 end
