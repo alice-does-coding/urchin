@@ -9,6 +9,7 @@ defmodule Urchin.Web.Layouts do
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>urchin · {assigns[:page_title] || "dashboard"}</title>
+        <meta name="csrf-token" content={Plug.CSRFProtection.get_csrf_token()} />
         <link rel="stylesheet" href="/dashboard.css" />
         <script defer src="/assets/phoenix/phoenix.min.js"></script>
         <script defer src="/assets/phoenix_html/phoenix_html.js"></script>

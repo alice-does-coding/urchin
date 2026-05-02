@@ -38,9 +38,13 @@ defmodule Urchin.Web.StaticAssets do
 
   @js """
   window.addEventListener("DOMContentLoaded", function () {
+    var csrfToken = document
+      .querySelector("meta[name='csrf-token']")
+      .getAttribute("content");
     var liveSocket = new window.LiveView.LiveSocket(
       "/live",
-      window.Phoenix.Socket
+      window.Phoenix.Socket,
+      { params: { _csrf_token: csrfToken } }
     );
     liveSocket.connect();
     window.liveSocket = liveSocket;

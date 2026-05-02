@@ -22,6 +22,11 @@ defmodule Urchin.Web.DashboardLiveTest do
     assert html =~ "counters"
   end
 
+  test "renders a csrf-token meta tag so LiveView can connect cleanly", %{conn: conn} do
+    html = conn |> get("/") |> response(200)
+    assert html =~ ~r|<meta name="csrf-token" content="[^"]+"|
+  end
+
   test "shows the empty-state hint when no minds are spawned", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/")
     assert html =~ "no minds spawned yet"
