@@ -278,7 +278,7 @@ This is a multi-year substrate, sketched alongside Garden Arcade and the post-GA
 ### Phase 1 — Parser + typechecker (months 3–6)
 4. Parser in Rust (`urchin/parser/`). AST only, no semantics.
 5. Typechecker (`urchin/types/`). Roles, kinship, wire-type-fitting, effect inference, naming-convention enforcement.
-6. LSP server exposing type/dataflow/test info as a queryable API.
+6. LSP server (`crates/lsp/`, Rust + `tower-lsp`) — primary editor target is JetBrains (IntelliJ plugin in `editors/intellij/` bundles the binary and registers `.ur` files via JetBrains' LSP support). VS Code as secondary minimal target (`editors/vscode/`). Exposes type/dataflow/test info as a queryable API. Rich capabilities from the start: semantic tokens, inlay hints, code lens, document symbols, signature help.
 
 ### Phase 2 — Runtime (months 6–9)
 7. Runtime in Rust (`urchin/runtime/`). Async task per actor (tokio), broadcast-channel bus per actor, role dispatch loop, hot-swap primitive, spatial topology registry.

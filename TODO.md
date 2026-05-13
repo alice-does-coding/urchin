@@ -38,7 +38,9 @@ Detailed roadmap in `DIRECTION.md` (Phases 0–5). Near-term picks to flag once 
 
 - [ ] Parser library choice — `chumsky` vs hand-rolled recursive descent vs `nom`
 - [ ] Incremental computation — `salsa` for the typechecker
-- [ ] LSP scaffold — `tower-lsp` skeleton
+- [ ] LSP server scaffold — `tower-lsp` in `crates/lsp/`, designed JetBrains-forward (rich capabilities: semantic tokens, inlay hints, code lens, document symbols)
+- [ ] IntelliJ plugin scaffold — `editors/intellij/` Kotlin plugin that bundles `urchin-lsp`, registers `.ur` files via JetBrains LSP support
+- [ ] VS Code extension scaffold — `editors/vscode/`, minimal binary-spawner
 
 ---
 
