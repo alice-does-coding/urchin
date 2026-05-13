@@ -1,0 +1,9 @@
+[package]
+name = "urchin-cli"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "urchin"
+path = "src/main.rs"

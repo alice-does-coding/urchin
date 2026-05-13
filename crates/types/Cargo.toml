@@ -1,0 +1,5 @@
+[package]
+name = "urchin-types"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
