@@ -15,6 +15,12 @@ pub enum Token {
     KwOn,
     /// `reply` — reply statement
     KwReply,
+    /// `if`
+    KwIf,
+    /// `else`
+    KwElse,
+    /// `broadcast`
+    KwBroadcast,
     /// PascalCase or snake_case identifier.
     Ident(String),
     /// Integer literal.
@@ -25,6 +31,12 @@ pub enum Token {
     Colon,
     /// `=` — binding
     Equals,
+    /// `==` — equality comparison
+    EqEq,
+    /// `<` — less-than
+    Lt,
+    /// `>` — greater-than
+    Gt,
     /// `+` — addition (the only arithmetic op for now)
     Plus,
     /// `,`
@@ -69,6 +81,9 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
         "role" => Token::KwRole,
         "on" => Token::KwOn,
         "reply" => Token::KwReply,
+        "if" => Token::KwIf,
+        "else" => Token::KwElse,
+        "broadcast" => Token::KwBroadcast,
         other => Token::Ident(other.to_string()),
     });
 
@@ -77,14 +92,17 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
         .map(|s: &str| Token::IntLit(s.parse().expect("lexed digits parse as i64")));
 
     // Multi-char operators must beat their single-char prefixes — `~>` before
-    // `~`, `|>` before any future `|`, `->` before any future `-`.
+    // `~`, `|>` before any future `|`, `->` before any future `-`, `==` before `=`.
     let punct = choice((
         just("->").to(Token::Arrow),
         just("~>").to(Token::TildeArrow),
         just("|>").to(Token::Pipe),
+        just("==").to(Token::EqEq),
         just('~').to(Token::Tilde),
         just(':').to(Token::Colon),
         just('=').to(Token::Equals),
+        just('<').to(Token::Lt),
+        just('>').to(Token::Gt),
         just('+').to(Token::Plus),
         just(',').to(Token::Comma),
         just('{').to(Token::LBrace),
@@ -259,6 +277,46 @@ mod tests {
                 Token::Comma,
                 Token::Ident("c".into()),
                 Token::RParen,
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_comparison_operators() {
+        assert_eq!(toks("< > =="), vec![Token::Lt, Token::Gt, Token::EqEq]);
+    }
+
+    #[test]
+    fn lexes_eqeq_greedily_over_equals() {
+        // `==` must beat `=` `=` — otherwise comparison would parse as
+        // assignment-of-an-assignment, which is nonsense.
+        assert_eq!(toks("=="), vec![Token::EqEq]);
+        assert_eq!(toks("="), vec![Token::Equals]);
+    }
+
+    #[test]
+    fn lexes_if_else_keywords() {
+        assert_eq!(toks("if else"), vec![Token::KwIf, Token::KwElse]);
+    }
+
+    #[test]
+    fn lexes_broadcast_keyword() {
+        assert_eq!(toks("broadcast"), vec![Token::KwBroadcast]);
+    }
+
+    #[test]
+    fn lexes_conditional_with_broadcast() {
+        assert_eq!(
+            toks("if level > 7 { broadcast Wants }"),
+            vec![
+                Token::KwIf,
+                Token::Ident("level".into()),
+                Token::Gt,
+                Token::IntLit(7),
+                Token::LBrace,
+                Token::KwBroadcast,
+                Token::Ident("Wants".into()),
+                Token::RBrace,
             ]
         );
     }

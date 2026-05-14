@@ -140,7 +140,11 @@ where
         })
 }
 
-/// `Stmt` ::= `Ident '=' Expr` | `'reply' Expr` | `Expr`
+/// `Stmt` ::= `Ident '=' Expr`
+///        | `'reply' Expr`
+///        | `'broadcast' TypePath ('(' expr_list? ')')?`
+///        | `'if' Expr '{' Stmt* '}' ('else' '{' Stmt* '}')?`
+///        | `Expr`
 ///
 /// The `Ident '=' …` form covers both local binding and state mutation;
 /// the typechecker distinguishes them by whether `Ident` names sealed state.
@@ -149,30 +153,70 @@ fn stmt_parser<'src, I>() -> impl Parser<'src, I, Stmt, extra::Err<Rich<'src, To
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
-    let name = select! { Token::Ident(n) => n };
+    recursive(|stmt| {
+        let name = select! { Token::Ident(n) => n };
+        let segment = select! { Token::Ident(n) => n };
 
-    let assign = name
-        .then_ignore(just(Token::Equals))
-        .then(expr_parser())
-        .map(|(name, value)| Stmt::Assign { name, value });
+        let assign = name
+            .then_ignore(just(Token::Equals))
+            .then(expr_parser())
+            .map(|(name, value)| Stmt::Assign { name, value });
 
-    let reply = just(Token::KwReply)
-        .ignore_then(expr_parser())
-        .map(Stmt::Reply);
+        let reply = just(Token::KwReply)
+            .ignore_then(expr_parser())
+            .map(Stmt::Reply);
 
-    // ExprStmt is tried last: assign and reply have distinguishing leading
-    // tokens, so this only catches expressions that start otherwise.
-    let expr_stmt = expr_parser().map(Stmt::ExprStmt);
+        let type_path = segment
+            .clone()
+            .separated_by(just(Token::Dot))
+            .at_least(1)
+            .collect::<Vec<_>>();
 
-    choice((assign, reply, expr_stmt))
+        // Optional arg list: present iff `(` follows the type path.
+        let args = expr_parser()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .or_not()
+            .map(Option::unwrap_or_default);
+
+        let broadcast = just(Token::KwBroadcast)
+            .ignore_then(type_path)
+            .then(args)
+            .map(|(message_type, args)| Stmt::Broadcast { message_type, args });
+
+        let block = stmt
+            .clone()
+            .repeated()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace));
+
+        let if_stmt = just(Token::KwIf)
+            .ignore_then(expr_parser())
+            .then(block.clone())
+            .then(just(Token::KwElse).ignore_then(block).or_not())
+            .map(|((cond, then_body), else_body)| Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            });
+
+        // ExprStmt is tried last: keyword-led forms have distinguishing leading
+        // tokens, so this only catches expressions that start otherwise.
+        let expr_stmt = expr_parser().map(Stmt::ExprStmt);
+
+        choice((if_stmt, broadcast, reply, assign, expr_stmt))
+    })
 }
 
 /// Expression grammar with the precedence ladder
 ///
-///   `~>`  (right-assoc, lowest)
-///   `|>`  (left-assoc)
-///   `+`   (left-assoc)
-///   call / atom (highest)
+///   `~>`             (right-assoc, lowest)
+///   `|>`             (left-assoc)
+///   `<` `>` `==`     (left-assoc, comparison)
+///   `+`              (left-assoc)
+///   call / atom      (highest)
 ///
 /// `~>` is right-associative because `a ~> b ~> c` semantically chains
 /// state-shift transformations; left-assoc would imply collapsing earlier.
@@ -206,15 +250,26 @@ where
         // and chumsky picks the first-matching branch.
         let atom = choice((int, call, ident, parens));
 
-        // `+` (left-assoc, tightest of the binary ops here).
+        // `+` (left-assoc, tightest binary op).
         let add = atom.clone().foldl(
             just(Token::Plus).ignore_then(atom).repeated(),
             |lhs, rhs| Expr::Binary(BinOp::Add, Box::new(lhs), Box::new(rhs)),
         );
 
-        // `|>` (left-assoc, between `+` and `~>`).
-        let pipe = add.clone().foldl(
-            just(Token::Pipe).ignore_then(add).repeated(),
+        // Comparison (`<`, `>`, `==`) — left-assoc, between `+` and `|>`.
+        let cmp_op = choice((
+            just(Token::Lt).to(BinOp::Lt),
+            just(Token::Gt).to(BinOp::Gt),
+            just(Token::EqEq).to(BinOp::Eq),
+        ));
+        let cmp = add.clone().foldl(
+            cmp_op.then(add).repeated(),
+            |lhs, (op, rhs)| Expr::Binary(op, Box::new(lhs), Box::new(rhs)),
+        );
+
+        // `|>` (left-assoc, between comparisons and `~>`).
+        let pipe = cmp.clone().foldl(
+            just(Token::Pipe).ignore_then(cmp).repeated(),
             |lhs, rhs| Expr::Binary(BinOp::Pipe, Box::new(lhs), Box::new(rhs)),
         );
 
@@ -521,6 +576,146 @@ mod tests {
             assert!(matches!(**lhs, Expr::Binary(BinOp::Add, ..)));
         } else {
             panic!("expected outer Add, got {e:?}");
+        }
+    }
+
+    // --- Comparisons ---
+
+    #[test]
+    fn parses_greater_than() {
+        assert!(matches!(
+            parse_expr_in_handler("level > 7"),
+            Expr::Binary(BinOp::Gt, _, _)
+        ));
+    }
+
+    #[test]
+    fn parses_less_than() {
+        assert!(matches!(
+            parse_expr_in_handler("level < 7"),
+            Expr::Binary(BinOp::Lt, _, _)
+        ));
+    }
+
+    #[test]
+    fn parses_equality() {
+        assert!(matches!(
+            parse_expr_in_handler("level == 0"),
+            Expr::Binary(BinOp::Eq, _, _)
+        ));
+    }
+
+    #[test]
+    fn comparison_binds_looser_than_addition() {
+        // `level + 1 > 7` parses as `(level + 1) > 7`
+        let e = parse_expr_in_handler("level + 1 > 7");
+        if let Expr::Binary(BinOp::Gt, lhs, _) = &e {
+            assert!(matches!(**lhs, Expr::Binary(BinOp::Add, ..)));
+        } else {
+            panic!("expected outer Gt, got {e:?}");
+        }
+    }
+
+    // --- Conditionals ---
+
+    #[test]
+    fn parses_if_without_else() {
+        let body = handler_body("role X { on Tick { if level > 7 { reply level } } }");
+        match &body[0] {
+            Stmt::If { else_body, then_body, .. } => {
+                assert!(else_body.is_none());
+                assert_eq!(then_body.len(), 1);
+            }
+            other => panic!("expected If, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_if_else() {
+        let body = handler_body(
+            "role X { on Tick { if level > 7 { reply 1 } else { reply 0 } } }",
+        );
+        match &body[0] {
+            Stmt::If { else_body: Some(eb), .. } => {
+                assert_eq!(eb.len(), 1);
+            }
+            other => panic!("expected If with else, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_nested_if() {
+        let body = handler_body(
+            "role X { on Tick { if level > 7 { if level > 10 { reply 1 } } } }",
+        );
+        if let Stmt::If { then_body, .. } = &body[0] {
+            assert!(matches!(then_body[0], Stmt::If { .. }));
+        } else {
+            panic!("expected outer If");
+        }
+    }
+
+    // --- Broadcast ---
+
+    #[test]
+    fn parses_broadcast_no_args() {
+        let body = handler_body("role X { on Tick { broadcast Wants } }");
+        match &body[0] {
+            Stmt::Broadcast { message_type, args } => {
+                assert_eq!(message_type, &vec!["Wants".to_string()]);
+                assert!(args.is_empty());
+            }
+            other => panic!("expected Broadcast, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_broadcast_with_args() {
+        let body = handler_body("role X { on Tick { broadcast Found(1) } }");
+        match &body[0] {
+            Stmt::Broadcast { message_type, args } => {
+                assert_eq!(message_type, &vec!["Found".to_string()]);
+                assert_eq!(args.len(), 1);
+                assert_eq!(args[0], Expr::Int(1));
+            }
+            other => panic!("expected Broadcast, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_broadcast_with_dotted_message_type() {
+        let body = handler_body("role X { on Tick { broadcast io.sim.Wakeup } }");
+        match &body[0] {
+            Stmt::Broadcast { message_type, .. } => {
+                assert_eq!(message_type, &vec!["io".to_string(), "sim".to_string(), "Wakeup".to_string()]);
+            }
+            other => panic!("expected Broadcast, got {other:?}"),
+        }
+    }
+
+    // --- The canonical reactive shape ---
+
+    #[test]
+    fn parses_canonical_hunger_handler() {
+        let body = handler_body(
+            "role Hunger {
+               ~ level: int
+
+               on Tick {
+                 level = level ~> level + 1
+                 if level > 7 {
+                   broadcast Wants
+                 }
+               }
+             }",
+        );
+        assert_eq!(body.len(), 2);
+        assert!(matches!(body[0], Stmt::Assign { .. }));
+        match &body[1] {
+            Stmt::If { then_body, .. } => {
+                assert!(matches!(then_body[0], Stmt::Broadcast { .. }));
+            }
+            other => panic!("expected If with Broadcast inside, got {other:?}"),
         }
     }
 }

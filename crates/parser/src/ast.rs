@@ -39,9 +39,7 @@ pub struct Handler {
     pub body: Vec<Stmt>,
 }
 
-/// Statements appear inside handler bodies. The set is intentionally small
-/// for this slice — assignment (local binding or state mutation, distinguished
-/// by whether the RHS contains a `~>`), `reply expr`, or a bare expression.
+/// Statements appear inside handler bodies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     /// `name = expr` — a local binding if `expr` has no `~>`, a state
@@ -49,8 +47,16 @@ pub enum Stmt {
     Assign { name: String, value: Expr },
     /// `reply expr`
     Reply(Expr),
-    /// A bare expression (mostly for pipe chains that exit via `reply`
-    /// or `broadcast` — neither of which is a statement).
+    /// `broadcast TypePath` or `broadcast TypePath(args)` — emit a message
+    /// onto the actor's bus.
+    Broadcast { message_type: Vec<String>, args: Vec<Expr> },
+    /// `if cond { then_body } else { else_body }`. Else is optional.
+    If {
+        cond: Expr,
+        then_body: Vec<Stmt>,
+        else_body: Option<Vec<Stmt>>,
+    },
+    /// A bare expression statement.
     ExprStmt(Expr),
 }
 
@@ -67,6 +73,12 @@ pub enum Expr {
 pub enum BinOp {
     /// `+`
     Add,
+    /// `<`
+    Lt,
+    /// `>`
+    Gt,
+    /// `==`
+    Eq,
     /// `|>` — pipe (left-associative, low precedence)
     Pipe,
     /// `~>` — state shift (right-associative, lowest precedence)
