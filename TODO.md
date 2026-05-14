@@ -24,7 +24,7 @@ _Punch list. Strategic roadmap lives in `DIRECTION.md`; this file tracks near-te
 - [ ] §6 — IO grammar (sketched; needs hardening)
 - [ ] §7 — Error & effect model
 - [ ] §8 — Stdlib role taxonomy
-- [ ] §9 — Worked examples (the seed corpus; first one in `examples/episodic_memory.ur`)
+- [ ] §9 — Worked examples (the seed corpus; first one in `examples/mind.ur`)
 
 ## Resolved §3.9 questions (this session)
 
