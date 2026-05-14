@@ -5,16 +5,17 @@ _Living draft. Started 2026-05-13. Companion to `DIRECTION.md` (vision) and the 
 ## Table of contents
 
 0. [Preamble](#0-preamble)
-1. Lexical structure _(TBD)_
-2. Type system _(TBD)_
-3. [Role grammar](#3-role-grammar) — **draft in progress**
-4. Actor grammar _(TBD)_
-5. Wire semantics _(TBD)_
-6. Comms grammar _(TBD)_
-7. Error & effect model _(TBD)_
+0.1. [Architecture](#01-architecture)
+1. Lexical structure _(TBD — see `crates/parser/src/lexer.rs` for current token set)_
+2. Type system _(TBD — see `crates/parser/src/ast.rs` for current `TypeExpr`)_
+3. [Role grammar](#3-role-grammar) — **draft, in lockstep with the parser**
+4. [Actor grammar](#4-actor-grammar) — **sketch**
+5. Wire semantics _(folded into §4 / §6 — actors compose roles, IO carries traffic; no separate wire layer)_
+6. [IO grammar](#6-io-grammar) — **sketch**
+7. Error & effect model _(TBD — algebraic effects with handlers, see §0.1)_
 8. Stdlib role taxonomy _(TBD)_
-9. Worked examples _(TBD — the seed corpus)_
-10. Open questions / deferred decisions
+9. Worked examples _(TBD — the seed corpus; see `examples/episodic_memory.ur` for the first)_
+10. [Open questions / deferred decisions](#10-open-questions)
 
 ---
 
@@ -22,7 +23,7 @@ _Living draft. Started 2026-05-13. Companion to `DIRECTION.md` (vision) and the 
 
 ### Scope
 
-This document specifies the Urchin language: lexical structure, grammar, type system, semantics, and the inter-actor protocol (comms). It is the authoritative reference for the compiler implementation and for any human or AI writing Urchin code.
+This document specifies the Urchin language: lexical structure, grammar, type system, semantics, and the IO layer through which actors communicate. It is the authoritative reference for the compiler implementation and for any human or AI writing Urchin code.
 
 ### Status
 
@@ -45,158 +46,267 @@ Grammar is given in EBNF with the following conventions:
 - `*` — zero or more
 - `+` — one or more
 - `(...)` — grouping
-- `// comment` — explanatory aside, not part of the grammar
 
-Source is UTF-8. Indentation is two spaces. Newlines are LF.
+Source is UTF-8. Newlines are LF. Block delimiters are `{` and `}`; whitespace within a block is not significant. Comments are `///` to end of line.
+
+---
+
+## 0.1 Architecture
+
+Urchin is structured as **three layers, each locked to one paradigm**, with **events as the cross-cutting substrate**.
+
+| Layer | What it is | Paradigm |
+|---|---|---|
+| **Roles** | Discrete, generic units of state + interface + handlers. No inter-role relations of any kind. | Functional |
+| **Actors** | Bags of composed roles + declared IO spines. The unit with relational mappings (parent/sibling/child topology). All algorithm is emergent from the role mix; no actor-level code. | Kay-original OOP (encapsulation + identity + message-passing, no inheritance) |
+| **IO** | Every operation that crosses an actor's boundary, including agent-to-agent comms. Namespaced as `io.{kind}.*`; tracked as a typed effect with full algebraic-effect handlers. | Telecom (one IO flavor among many) generalized |
+
+### Roles do not relate to each other
+
+A role has no parent, no kinship, no inheritance, and no abstract/concrete distinction. Roles are flat building blocks. Composition lives at the actor level. Cross-cutting capabilities (recoverability, observability, etc.) are expressed by composing capability roles into the actor that needs them, not by inheriting capability into a base role.
+
+### Actors are minimal
+
+An actor declaration carries only:
+
+1. The roles it composes,
+2. The IO spines it declares,
+3. Dispatch declarations when 2+ composed roles handle the same message type.
+
+There is no actor-level behavior code. Behavior is what the role mix emergently does when IO arrives. Variation between agents in a simulation is variation in role composition.
+
+### IO is the only boundary
+
+There is no separate "wire" or "bus" mechanism for inter-actor communication. Actor-to-actor traffic is just IO (typically `io.sim.comms.*`), one IO flavor among many.
+
+Namespace shape:
+
+- `io.sim.{comms,spatial,clock,random,...}.*` — simulation-internal, deterministic, replayable, total (no `Result` wrapping)
+- `io.{http,ws,sms,fs,db,...}.*` — real-world, returns `Result`, can fail/timeout
+
+### Sim is deterministic and replayable
+
+Every simulation has a journaled seed. PRNG draws (`io.sim.random.*`) regenerate from the seed; non-sim IO inputs are journaled. Replay is "same seed + same journaled real-world inputs → bit-identical state." Time-travel debugging falls out for free.
+
+### IO is tracked as an effect
+
+Roles and handlers carry an inferred effect set. A handler that only mutates state has an empty effect set; one that calls `io.sim.comms.send` carries `{io.sim.comms}`; one that calls `io.http.get` carries `{io.http}`. Effects show up in signatures (currently sketched as `T -> U / {effects}`).
+
+Urchin uses **full algebraic effects with handlers** (Koka / Frank / Eff lineage). Any actor or test harness can wrap a sub-region and intercept its effects: mocking is "wrap with a handler that fakes the IO"; sandboxing is "wrap with a handler that rejects forbidden effects." Time-travel debugging via effect replay falls out naturally.
+
+### Multi-handler dispatch
+
+When 2+ composed roles handle the same message type, the actor MUST specify how they fire — no implicit default. Three modes:
+
+- `on T parallel` — all handlers fire simultaneously; sealed-state means no races; broadcasts queue for the next step.
+- `on T sequence(A -> B -> C)` — handlers fire in declared order; later handlers see earlier ones' state changes and broadcasts.
+- `on T async` — fire-and-forget, no wait. Deterministic schedule under the hood for replay.
+
+When 0 or 1 composed roles handle a type, no dispatch declaration needed. **0 composed handlers for a possible incoming type is a compile-time error.**
 
 ---
 
 ## 3. Role grammar
 
-_Status: first draft (2026-05-13). Open questions flagged inline at 3.9._
+_Status: draft, in lockstep with `crates/parser`. Sections marked **(parsed)** are accepted by the current parser; sections marked **(planned)** are designed but not yet implemented._
 
-A **role** is the smallest compositional unit of Urchin. A role corresponds roughly to one cognitive faculty or one cohesive bundle of state-plus-behavior. Roles are assembled into actors (see Section 4); roles do not run on their own.
+A **role** is the smallest compositional unit of Urchin. A role corresponds roughly to one cognitive faculty or one cohesive bundle of state-plus-behavior. Roles are assembled into actors (see Section 4); roles do not run on their own. **Roles do not relate to each other** — see §0.1.
 
 ### 3.1 Structure of a role
 
-A role declaration has up to four sections, in order:
+A role declaration has up to three sections inside its brace-delimited body, in order:
 
-1. **Header** — the `role` keyword, the role name, and (optionally) the parent role(s) it implements.
-2. **Interface** — the methods this role exposes to the actor's wire layer.
-3. **State** — the role's private state, prefixed with `~`.
-4. **Handlers** — `on Message:` clauses that respond to incoming messages.
+1. **Interface** — the methods this role exposes to the actor's IO layer.
+2. **State** — the role's private state, prefixed with `~`.
+3. **Handlers** — `on Message { … }` clauses that respond to incoming messages.
 
-Sections are identified by their syntactic shape — not by section keywords — and appear at most once each, in the order above. Empty sections are simply omitted.
+Sections are identified by their syntactic shape (interface = bare `name:`, state = `~ name:`, handler = `on TypePath`) and appear at most once each, in the order above. **Order is enforced** — a state field after a handler is a parse error, not a reorder hint. Empty sections are simply omitted.
 
-### 3.2 Grammar (EBNF)
+### 3.2 Grammar (EBNF) **(parsed)**
 
 ```ebnf
-role_decl         = 'role' role_name kinship? newline
-                    interface_section?
-                    state_section?
-                    handler_section?
+role_decl         = 'role' role_name '{'
+                      interface_method*
+                      state_field*
+                      handler*
+                    '}'
 
-role_name         = pascal_ident                    // e.g. AssociativeMemory
+role_name         = pascal_ident                    // e.g. EpisodicMemory
 
-kinship           = ':' role_path (',' role_path)*  // multi-kinship — see 3.9.A
-role_path         = pascal_ident ('.' pascal_ident)*
-
-interface_section = (interface_method newline)+
 interface_method  = lower_ident ':' type_expr
-
-state_section     = (state_field newline)+
 state_field       = '~' lower_ident ':' type_expr
+handler           = 'on' type_path lower_ident? '{' stmt* '}'
 
-handler_section   = (handler newline)+
-handler           = 'on' message_pattern ':' newline indented_block
-
-message_pattern   = type_path bind_ident?           // e.g. `Query q` or `Tick`
+type_expr         = type_atom ('->' type_expr)?     // right-associative
+type_atom         = type_path
 type_path         = pascal_ident ('.' pascal_ident)*
-bind_ident        = lower_ident
+
+stmt              = lower_ident '=' expr            // local binding or state mutation
+                  | 'reply' expr
+                  | expr
+
+expr              = expr '~>' expr                  // right-associative, lowest precedence
+                  | expr '|>' expr                  // left-associative
+                  | expr '+' expr                   // left-associative
+                  | call
+                  | '(' expr ')'
+                  | int_literal
+                  | lower_ident
+
+call              = lower_ident '(' (expr (',' expr)*)? ')'
 ```
 
-Lexical productions (`pascal_ident`, `lower_ident`, `newline`, `indented_block`) are defined in Section 1. The `type_expr` production is defined in Section 2 and includes function types (`A -> B`), parameterised types (`[T]`), and refinement types (`0..1`).
+**Operator precedence** (low → high): `~>` < `|>` < `+` < call/atom.
+- `~>` is **right-associative** so `a ~> b ~> c` parses as `a ~> (b ~> c)` — chained state shifts compose.
+- `|>` and `+` are **left-associative** so `a |> b |> c` reads left-to-right (the lightsaber).
 
-### 3.3 Canonical examples
+### 3.3 Canonical example **(parsed)**
 
-```
-role AssociativeMemory : Memory.Associative
-  recall:  Query -> [Trace]
-  store:   Trace -> ()
-  ~ traces: [Trace]
+```ur
+/// from examples/episodic_memory.ur
+role EpisodicMemory {
+  record: Event -> Unit
+  recall: Cue -> int
 
-  on Query q:
-    matches = traces |> filter(by: q.cue) |> rank(by: q.weight)
-    reply matches
-```
+  ~ count: int
 
-```
-role Hunger : Drive
-  ~ level: 0..1
+  on Event e {
+    count = count ~> count + 1
+  }
 
-  on Tick:
-    level = level ~> min(1.0, level + 0.01)
-    if level > 0.7: broadcast Wants(Food)
+  on Cue c {
+    reply count
+  }
+}
 ```
 
 ### 3.4 Section-by-section semantics
 
-**Header.** The `:` is the *kinship* relation. `role AssociativeMemory : Memory.Associative` declares that `AssociativeMemory` is a concrete role implementing the abstract role `Memory.Associative`. Multiple parents (mixin-style) are written `: A, B`. See 3.9.A.
+**Interface methods.** `name: T` declares a method this role exposes. Function-typed methods appear as `name: Arg -> Ret`. The IO layer connects external signals to these methods. There is no separate "implements" relation — a role just exposes what it exposes; an actor composing it may or may not wire the methods through.
 
-**Interface.** Lines of the form `name: T` declare methods this role exposes. Function-typed methods appear as `name: ArgType -> ReturnType` because the function-type arrow lives inside `type_expr`. The wire layer (Section 5) connects external signals to these methods. Interface declarations are the *contract* a parent abstract role specifies and a concrete role must satisfy; restating a method on a concrete role re-declares it for clarity and local type-checking, and must agree with the parent's declaration.
+**State fields.** `~ name: T` declares private state. State is sealed: other roles cannot read or write it directly. The `~` prefix makes state declarations and mutations greppable in one regex AND marks the journal hook point — every `~>` mutation is where the runtime engages reversibility machinery. (Resolved §3.9.B: both reasons — language-level greppability and runtime-level journal hook.)
 
-**State.** Lines of the form `~ name: T` declare private state. State is mutable through the `~>` operator (3.5). State is sealed: other roles cannot read or write it directly — they can only observe state-derived effects through messages this role emits. The `~` prefix makes state declarations and mutations visually greppable.
+**Handlers.** `on T b { … }` declares a handler that runs when a message of type `T` arrives at the actor and dispatch resolves to this role. The optional `b` binds the message to a local name. Inside a handler the body has access to the bound message, the role's state fields (read normally, mutate via `~>`), and pure helper expressions.
 
-**Handlers.** `on T b:` declares a handler that runs when a message of type `T` arrives on the actor's bus. The optional `b` binds the incoming message to a local name. Inside a handler the body has access to the bound message, the role's state fields (read/write via `~>`), and pure helper expressions. Handlers run to completion atomically within a role; concurrency exists at the actor and wire level, not within a role.
+### 3.5 Handler-body statements **(parsed)**
 
-### 3.5 Body expressions in a handler
+- **Assignment**: `name = expr`. Local binding if `expr` contains no `~>`; state mutation if it does. The typechecker classifies based on whether `name` refers to sealed state.
+- **Reply**: `reply expr` sends `expr` back to the caller of the current message. Valid only inside a handler whose interface method declares a non-`Unit` return type.
+- **Expression statement**: a bare expression. Mostly used for pipe chains exiting via a side-effect verb.
 
-The following constructs appear in handler bodies. Full expression grammar is in Section 2.
+### 3.6 Naming rules **(planned — not yet enforced by the compiler)**
 
-- **Local binding**: `name = expr`. Locals are immutable after binding.
-- **Pipe**: `expr |> fn(...)` is sugar for `fn(expr, ...)` — the piped value is the first argument.
-- **State update**: `field = field ~> new_value`. The `~>` operator is *state shift*: it produces the next state value AND (when the result is assigned back to the same field) updates the field in place. See 3.9.B for why `~>` exists distinctly from `=`.
-- **Reply**: `reply expr` sends `expr` back to the sender of the current message. Only valid inside a handler whose interface method declares a non-`()` return type.
-- **Broadcast**: `broadcast Msg(...)` emits a message to the actor's bus. Any role wired to listen for `Msg` will receive it.
-- **Conditional**: `if cond: expr` is a single-line conditional. Multi-line `if`/`else` and `match` are deferred to Section 2.
+- Role names: **PascalCase** — `EpisodicMemory`, `Hunger`, `Voice`.
+- Interface methods, state fields, handler bindings, locals: **snake_case**.
+- Predicate methods must begin with `is_`, `has_`, or `can_`.
+- Methods or fields whose value is a timestamp must end in `_at`.
+- Identifiers referencing entities by handle must end in `_id`.
 
-### 3.6 Naming rules (enforced by the compiler)
+The compiler will treat these as hard syntactic constraints, not lint warnings. Naming carries type info, and naming-as-rule turns conventions into free training signal for AI writing or reading Urchin code.
 
-- Role names: **PascalCase** — `AssociativeMemory`, `Hunger`, `Voice`.
-- Interface methods, state fields, handler binders, and locals: **snake_case** — `recall`, `traces`, `level`, `matches`.
-- Predicate methods must begin with `is_`, `has_`, or `can_` (e.g. `is_satisfied`, `has_room`, `can_recall`).
-- Methods or fields whose value is a timestamp must end in `_at` (`created_at`, `seen_at`).
-- Identifiers referencing entities by handle must end in `_id` (`actor_id`, `trace_id`).
+### 3.7 Tests adjacent to a role **(planned)**
 
-The compiler treats these as hard syntactic constraints — a misnamed item is a parse-time error, not a lint warning. The reasoning: naming carries type info, and the parser turning naming into free training signal for AI writing or reading Urchin code (per `DIRECTION.md`).
+A role may include `test` blocks as a sibling section to handlers. Full grammar deferred to §5 (wire semantics) since tests reuse the same dispatch mechanisms.
 
-### 3.7 Tests adjacent to a role
+### 3.8 Typed comments **(planned)**
 
-A role may include one or more `test` blocks, syntactically a sibling section to handlers:
+Three reserved doc-comment forms recognized by the compiler:
 
-```
-role Hunger : Drive
-  ~ level: 0..1
-
-  on Tick:
-    level = level ~> min(1.0, level + 0.01)
-
-  test "tick raises level by 0.01":
-    given Hunger { level: 0.5 }
-    send Tick
-    expect level == 0.51
-```
-
-The `test` block is a first-class part of the role declaration — the spec lives next to the code. Full grammar TBD; see 3.9.C.
-
-### 3.8 Typed comments
-
-Three reserved comment forms are recognized by the compiler:
-
-- `@invariant cond` — a condition the role must maintain across all handler executions. The compiler attempts to verify; un-verifiable invariants are reported but non-blocking.
-- `@assumes cond` — a precondition the role assumes about its inputs or environment.
-- `@because text` — machine-readable rationale for non-obvious code. Surfaced in error messages and LSP hover.
-
-```
-role Hunger : Drive
-  @invariant level >= 0.0 and level <= 1.0
-  ~ level: 0..1
-
-  on Tick:
-    @because "starvation cap prevents runaway growth"
-    level = level ~> min(1.0, level + 0.01)
-```
-
-Free-form `//` comments — see 3.9.D.
+- `@invariant cond` — a condition the role maintains across all handler executions.
+- `@assumes cond` — a precondition about inputs or environment.
+- `@because text` — machine-readable rationale for non-obvious code; surfaced in error messages and LSP hover.
 
 ### 3.9 Open questions
 
-- **3.9.A — Multiple kinship.** Should a concrete role be allowed to implement multiple abstract roles (`role X : Memory.Associative, Recoverable`), or strictly one? Multi-kinship adds expressive power but complicates the type system (diamond inheritance, conflicting interface methods). **Drafted answer:** allow, but require explicit disambiguation when interface methods clash. Locking this affects Section 2 (kinship types).
-- **3.9.B — Why `~>` distinct from `=`.** A state update could be written `level = level + 0.01`. Why introduce `~>`? Two candidate reasons: (1) `~>` makes mutation visually greppable, so every state change in a codebase can be found with one regex. (2) `~>` is the journal/replay hook point — the runtime (per `DIRECTION.md`) makes every state change reversible, and the operator marks where that machinery engages. **Drafted answer:** both. The visual distinction earns its keep at the language level; the journal hook earns its keep at the runtime level.
-- **3.9.C — Test block syntax.** The sketch in 3.7 uses `given` / `send` / `expect`. Need to formalise: is `given` constructing a role instance or seeding state? Is `send` synchronous? How do tests assert on async outcomes? **Drafted answer:** defer until Section 5 (wire semantics) is drafted, since tests need to use the same mechanisms wires use.
-- **3.9.D — Free-form comment policy.** Should `//` comments be entirely banned outside the typed forms (`@invariant`, `@assumes`, `@because`), or allowed-but-linted? **Drafted answer:** allowed but the LSP suggests converting to a typed form when the comment content looks load-bearing. Pure banning is purist; the linted middle path catches the cases that matter without blocking quick scratch notes.
-- **3.9.E — Implicit-vs-explicit sections.** Should the four sections be marked with keywords (`interface:`, `state:`, `handlers:`) or left implicit (identified by syntactic shape, as drafted)? **Drafted answer:** implicit, per the DIRECTION examples. Explicit would be more discoverable but more ceremonious — runs against the "terse + regular" principle. Implicit relies on the syntactic distinguishers (`~` for state, `on` for handlers, bare `name:` for interface) being unambiguous, which they are if state always uses `~` and handlers always use `on`.
+- **3.9.A — Multiple kinship.** **RESOLVED — dissolved.** Roles do not relate to each other (see §0.1). Cross-cutting capabilities are composed at the actor level, not inherited at the role level. The original investigation in `design/multi-kinship.md` is retired.
+- **3.9.B — Why `~>` distinct from `=`.** **RESOLVED — both reasons.** Greppability at language level + journal hook at runtime level. See §3.4.
+- **3.9.C — Test block syntax.** Open. Defer until handler/IO semantics are stable.
+- **3.9.D — Free-form comment policy.** **RESOLVED — only `///`.** Single-line `///` and multi-line bracketed by `///` markers. No other comment form.
+- **3.9.E — Implicit vs explicit section keywords.** **RESOLVED — implicit.** Sections identified by syntactic shape (`~`, `on`, bare `name:`); no `interface:`, `state:`, `handlers:` keywords.
 
 ---
 
-_End of section 3 draft. Section 4 (Actor grammar) is the natural next section — it composes roles via the `roles:`, `wire:`, and `speaks:` blocks._
+## 4. Actor grammar
+
+_Status: sketch, ahead of the parser._
+
+An actor declaration is intentionally minimal: composed roles, declared IO spines, and (when needed) dispatch declarations. There is no actor-level behavior code.
+
+### 4.1 Sketched grammar
+
+```ebnf
+actor_decl   = 'actor' actor_name '{'
+                 role_compose*           // bare PascalCase paths
+                 dispatch_decl*          // only when 2+ roles handle the same type
+                 io_spine*               // name : io.<path>
+               '}'
+
+role_compose = type_path                 // e.g. Memory.Associative
+dispatch_decl = 'on' type_path dispatch_mode
+dispatch_mode = 'parallel' | 'async' | 'sequence' '(' type_path ('->' type_path)+ ')'
+io_spine     = lower_ident ':' io_path
+io_path      = 'io' '.' lower_ident ('.' lower_ident)*
+```
+
+### 4.2 Sketched example
+
+```ur
+actor Mind {
+  Memory.Associative
+  Hunger
+  Voice
+  NegativeBias
+
+  on Stimulus parallel
+  on Tick     sequence(Voice -> NegativeBias)
+
+  http:     io.http.server
+  clock:    io.sim.clock
+  siblings: io.sim.comms.peer
+}
+```
+
+### 4.3 Composition completeness rule
+
+Compile-time error if any message type the actor can possibly receive — from a declared IO spine OR from a `broadcast` in any composed role — has no composed-role handler.
+
+---
+
+## 6. IO grammar
+
+_Status: sketch, ahead of the parser._
+
+The IO layer is the only boundary substrate. Every IO module exposes typed templates with the same shape, parameterized by direction, content type, and (for sim) edge-kind / (for real) failure mode.
+
+### 6.1 Namespace
+
+- `io.sim.*` — simulation-internal. Deterministic, replayable, total (no `Result`). Examples: `io.sim.comms`, `io.sim.spatial`, `io.sim.clock`, `io.sim.random`.
+- `io.{http,ws,sms,fs,db,audio,...}.*` — real-world. Returns `Result`, can fail, time out.
+
+### 6.2 Effect signatures (sketched)
+
+```ur
+fetch: Url -> Result[Json, FetchError] / {io.http}
+```
+
+The `/ {effects}` clause is the effect set. Most signatures get effects inferred; explicit annotation is for readability and contract-strengthening. The effect-set delimiter (`{}`, `[]`, or `<>`) is open — `{}` collides visually with `///` doc comments but parses unambiguously.
+
+### 6.3 Algebraic effects with handlers
+
+A handler can wrap a region of code and intercept all effect operations performed inside it. Test harnesses use this for mocking; runtime journaling uses this for replay. Detailed semantics in §7.
+
+---
+
+## 10. Open questions
+
+Decisions still on the table:
+
+- **Effect-set delimiter** — `{}` vs `[]` vs `<>`. Currently `{}` in sketches; reuses brace glyph but parses unambiguously.
+- **Spatial substrate** — whether actor coordinates are in the language semantics or only in the IDE projection. Three flavors named (substrate / view / hybrid-emergent); not yet locked.
+- **Performative layer** — whether KQML/FIPA-style performatives (`tell`, `ask`, `subscribe`) are baked into IO templates or are just a vocabulary of template parameters.
+- **Newline significance** — currently the lexer treats all whitespace as insignificant; multi-line expression chains (`traces |>\n  filter(by: c) |>\n  reply`) need either lexer-tracked newlines or a smarter expression parser.
+- **Visibility** — likely no separate modifier needed (state is sealed by `~`, interface methods are public, locals are local). Confirmed only when we hit a case that needs it.
+
+---
+
+_End of spec snapshot. Sections marked **(parsed)** track the implementation; sketched sections (§4, §6) get hardened as their parsers land._
