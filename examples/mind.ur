@@ -1,6 +1,7 @@
 /// mind.ur — the urchin's first actor. composes three roles into a
 /// minimal cognitive agent: an episodicMemory that records events,
-/// a hunger drive that tracks need, and a voice that signals to siblings.
+/// a hunger drive that tracks need, and a voice whose mood shifts
+/// in response to hunger's signals.
 ///
 /// the actor body has three sections in canonical order:
 ///   1. IO spines (the substrate the actor talks to)
@@ -45,11 +46,15 @@ role voice {
 
   on tick {
     match mood {
-      calm     -> broadcast hum
-      anxious  -> broadcast whisper
-      excited  -> broadcast shout
+      calm     -> mood = mood ~> calm
+      anxious  -> mood = mood ~> anxious
+      excited  -> mood = mood ~> calm
       _        -> {}
     }
+  }
+
+  on wants need {
+    mood = mood ~> anxious
   }
 }
 

@@ -366,6 +366,7 @@ dependencies = [
  "ariadne",
  "clap",
  "urchin-parser",
+ "urchin-types",
 ]
 
 [[package]]
@@ -378,6 +379,9 @@ dependencies = [
 [[package]]
 name = "urchin-types"
 version = "0.0.0"
+dependencies = [
+ "urchin-parser",
+]
 
 [[package]]
 name = "utf8parse"
