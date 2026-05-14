@@ -16,12 +16,19 @@ pub struct Module {
 /// IO + role-to-role wiring (who's plugged into what), then dispatch
 /// declarations (how races resolve). No actor-level behavior code.
 ///
-/// Actor names are camelCase per the language convention; role instance
-/// names are also camelCase (typically the case-shifted form of the
-/// PascalCase role they instantiate).
+/// `parent` (optional) declares the actor's position in the topology
+/// tree: `actor mind @ rubberDuck { ... }` reads as "the mind slot of
+/// rubberDuck." The actor's name is the slot name in its parent.
+/// Root actors (no parent) leave this `None`. Sibling and child
+/// relationships are inferred from the union of all `@` clauses
+/// across a project.
+///
+/// All identifiers — actor name and parent reference — are camelCase
+/// per the language convention.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActorDecl {
     pub name: String,
+    pub parent: Option<String>,
     pub io_spines: Vec<IoSpine>,
     pub role_instances: Vec<RoleInstance>,
     pub dispatch: Vec<DispatchDecl>,

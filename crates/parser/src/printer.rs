@@ -119,7 +119,11 @@ fn write_handler(out: &mut String, h: &Handler, depth: usize) {
 // --- Actor --------------------------------------------------------------
 
 fn write_actor(out: &mut String, a: &ActorDecl) {
-    write!(out, "actor {} {{", a.name).unwrap();
+    write!(out, "actor {}", a.name).unwrap();
+    if let Some(parent) = &a.parent {
+        write!(out, " @ {parent}").unwrap();
+    }
+    out.push_str(" {");
 
     let has_spines = !a.io_spines.is_empty();
     let has_instances = !a.role_instances.is_empty();
@@ -616,6 +620,30 @@ mod tests {
                on clock.tick sequence(episodicMemory -> voice)
              }",
         );
+    }
+
+    #[test]
+    fn round_trips_actor_with_parent() {
+        round_trip(
+            "actor mind @ rubberDuck {
+               clock: io.sim.clock
+               hunger(clock)
+             }",
+        );
+    }
+
+    #[test]
+    fn formats_actor_with_parent() {
+        let m = parse("actor mind @ rubberDuck {}").unwrap();
+        let f = format(&m);
+        assert!(f.contains("actor mind @ rubberDuck"), "got:\n{f}");
+    }
+
+    #[test]
+    fn formats_root_actor_without_at_clause() {
+        let m = parse("actor mind {}").unwrap();
+        let f = format(&m);
+        assert!(!f.contains("@"), "root actor shouldn't render `@`; got:\n{f}");
     }
 
     #[test]

@@ -88,6 +88,9 @@ pub enum Token {
     Slash,
     /// `.` for module paths
     Dot,
+    /// `@` — actor parent declaration: `actor child @ parent { ... }`
+    /// reads as "child located at parent" / "the child slot of parent."
+    At,
 }
 
 pub type Span = SimpleSpan<usize>;
@@ -134,6 +137,7 @@ impl fmt::Display for Token {
             Token::RBracket => "]",
             Token::Slash => "/",
             Token::Dot => ".",
+            Token::At => "@",
         };
         f.write_str(s)
     }
@@ -218,6 +222,7 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
         just(']').to(Token::RBracket),
         just('/').to(Token::Slash),
         just('.').to(Token::Dot),
+        just('@').to(Token::At),
     ));
 
     // Order matters: float beats int (so `1.0` doesn't lex as `1 . 0`),

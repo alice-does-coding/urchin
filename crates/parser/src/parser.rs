@@ -511,11 +511,15 @@ where
         .then(dispatch.repeated().collect::<Vec<_>>())
         .delimited_by(just(Token::LBrace), just(Token::RBrace));
 
+    let parent_clause = just(Token::At).ignore_then(segment.clone()).or_not();
+
     just(Token::KwActor)
         .ignore_then(actor_name)
+        .then(parent_clause)
         .then(body)
-        .map(|(name, ((io_spines, role_instances), dispatch))| ActorDecl {
+        .map(|((name, parent), ((io_spines, role_instances), dispatch))| ActorDecl {
             name,
+            parent,
             io_spines,
             role_instances,
             dispatch,
@@ -1308,9 +1312,32 @@ mod tests {
     fn parses_empty_actor() {
         let a = first_actor("actor mind {}");
         assert_eq!(a.name, "mind");
+        assert!(a.parent.is_none());
         assert!(a.io_spines.is_empty());
         assert!(a.role_instances.is_empty());
         assert!(a.dispatch.is_empty());
+    }
+
+    #[test]
+    fn parses_actor_with_parent() {
+        let a = first_actor("actor mind @ rubberDuck {}");
+        assert_eq!(a.name, "mind");
+        assert_eq!(a.parent.as_deref(), Some("rubberDuck"));
+    }
+
+    #[test]
+    fn parses_actor_with_parent_and_body() {
+        let a = first_actor(
+            "actor mind @ rubberDuck {
+               clock: io.sim.clock
+               hunger(clock)
+               on clock.tick parallel
+             }",
+        );
+        assert_eq!(a.parent.as_deref(), Some("rubberDuck"));
+        assert_eq!(a.io_spines.len(), 1);
+        assert_eq!(a.role_instances.len(), 1);
+        assert_eq!(a.dispatch.len(), 1);
     }
 
     #[test]
