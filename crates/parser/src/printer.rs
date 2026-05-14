@@ -296,6 +296,29 @@ fn write_expr_prec(out: &mut String, e: &Expr, outer: u8, depth: usize) {
         }
         Expr::Ident(n) => out.push_str(n),
         Expr::Binary(op, l, r) => {
+            // Pipe chains of 3+ stages render across lines for the
+            // canonical lightsaber shape:
+            //   matches = episodes
+            //     |> filter(by: c)
+            //     |> rank(by: c.weight)
+            if matches!(op, BinOp::Pipe) {
+                let chain = flatten_pipe_chain(e);
+                if chain.len() >= 3 {
+                    let p = binop_precedence(BinOp::Pipe);
+                    write_expr_prec(out, chain[0], p, depth);
+                    for seg in &chain[1..] {
+                        out.push('\n');
+                        write_indent(out, depth + 1);
+                        out.push_str("|> ");
+                        write_expr_prec(out, seg, p + 1, depth + 1);
+                    }
+                    if needs_parens {
+                        out.push(')');
+                    }
+                    return;
+                }
+            }
+
             let p = binop_precedence(*op);
             // Left-assoc operators keep `l` at the same precedence; the right
             // operand needs `p+1` to force parens on equal-precedence siblings.
@@ -456,6 +479,25 @@ fn expr_precedence(e: &Expr) -> u8 {
     }
 }
 
+/// Flatten a left-associative pipe chain into a `Vec` of segments, head first.
+/// `a |> b |> c` parses as `Binary(Pipe, Binary(Pipe, a, b), c)`; this returns
+/// `[a, b, c]`.
+fn flatten_pipe_chain(e: &Expr) -> Vec<&Expr> {
+    let mut segments = Vec::new();
+    collect_pipe(e, &mut segments);
+    segments
+}
+
+fn collect_pipe<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+    match e {
+        Expr::Binary(BinOp::Pipe, l, r) => {
+            collect_pipe(l, out);
+            out.push(r);
+        }
+        _ => out.push(e),
+    }
+}
+
 fn binop_precedence(op: BinOp) -> u8 {
     match op {
         BinOp::StateShift => 1,
@@ -604,5 +646,34 @@ mod tests {
         let f = format(&m);
         assert!(!f.contains("(1"), "no parens around `1` expected; got:\n{f}");
         assert!(f.contains("x = 1 + 2"));
+    }
+
+    #[test]
+    fn single_pipe_stays_inline() {
+        let m = parse("role X { on T { x = a |> b() } }").unwrap();
+        let f = format(&m);
+        assert!(f.contains("x = a |> b()"), "expected inline pipe; got:\n{f}");
+        assert!(!f.contains("\n      |>"), "single pipe should not wrap; got:\n{f}");
+    }
+
+    #[test]
+    fn three_stage_pipe_wraps_across_lines() {
+        let m = parse("role X { on T { x = a |> b() |> c() } }").unwrap();
+        let f = format(&m);
+        // After "x = a", a newline + indent + "|>" should appear.
+        assert!(
+            f.contains("a\n      |> b()\n      |> c()"),
+            "expected multi-line pipe; got:\n{f}"
+        );
+    }
+
+    #[test]
+    fn long_pipe_chain_in_assignment_round_trips() {
+        round_trip("role X { on T { matches = a |> b() |> c() |> d() |> e() } }");
+    }
+
+    #[test]
+    fn pipe_wrap_is_idempotent() {
+        idempotent("role X { on T { x = a |> b() |> c() |> d() } }");
     }
 }
