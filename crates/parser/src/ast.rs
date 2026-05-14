@@ -65,10 +65,21 @@ pub enum Expr {
     Int(i64),
     Ident(String),
     Binary(BinOp, Box<Expr>, Box<Expr>),
-    /// `name(arg, arg, ...)`
-    Call { callee: String, args: Vec<Expr> },
+    /// `name(arg, arg, ...)` — args can mix positional and `name: expr`.
+    Call { callee: String, args: Vec<CallArg> },
     /// `[a, b, c]` — list literal. Empty list `[]` is allowed.
     List(Vec<Expr>),
+    /// `expr.field` — field access. Left-associative, so `a.b.c` parses
+    /// as `(a.b).c`.
+    FieldAccess { object: Box<Expr>, field: String },
+}
+
+/// A call argument is either positional (`filter(c)`) or named
+/// (`filter(by: c)`). The compiler may require named args for some methods.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallArg {
+    Positional(Expr),
+    Named { name: String, value: Expr },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

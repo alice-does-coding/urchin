@@ -8,7 +8,7 @@ use chumsky::input::{Input, ValueInput};
 use chumsky::prelude::*;
 
 use crate::ast::{
-    BinOp, Expr, Handler, InterfaceMethod, Module, RoleDecl, StateField, Stmt, TypeExpr,
+    BinOp, CallArg, Expr, Handler, InterfaceMethod, Module, RoleDecl, StateField, Stmt, TypeExpr,
 };
 use crate::lexer::{lex, Span, Token};
 use crate::ParseError;
@@ -233,13 +233,22 @@ where
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
+        // Call arg: `name: expr` (named) is tried before bare `expr` (positional).
+        // The named form is unambiguous because `Ident Colon` only appears here
+        // — type annotations live in declaration positions, not expressions.
+        let arg = choice((
+            name.then_ignore(just(Token::Colon))
+                .then(expr.clone())
+                .map(|(name, value)| CallArg::Named { name, value }),
+            expr.clone().map(CallArg::Positional),
+        ));
+
         // Function call: `name(arg, arg, ...)`. The leading `name` would
         // otherwise be parsed as a bare ident; the `LParen` after it
         // distinguishes a call.
         let call = name
             .then(
-                expr.clone()
-                    .separated_by(just(Token::Comma))
+                arg.separated_by(just(Token::Comma))
                     .allow_trailing()
                     .collect::<Vec<_>>()
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
@@ -257,7 +266,18 @@ where
 
         // Try `call` before bare `ident` — both start with `Ident`,
         // and chumsky picks the first-matching branch.
-        let atom = choice((int, call, ident, list, parens));
+        let primary = choice((int, call, ident, list, parens));
+
+        // Field access: `.field` chained any number of times after a primary.
+        // Left-associative: `a.b.c` parses as `(a.b).c`.
+        let field = select! { Token::Ident(n) => n };
+        let atom = primary.foldl(
+            just(Token::Dot).ignore_then(field).repeated(),
+            |obj, field| Expr::FieldAccess {
+                object: Box::new(obj),
+                field,
+            },
+        );
 
         // `+` (left-assoc, tightest binary op).
         let add = atom.clone().foldl(
@@ -515,14 +535,97 @@ mod tests {
     }
 
     #[test]
-    fn parses_call_with_args() {
+    fn parses_call_with_positional_args() {
         assert_eq!(
             parse_expr_in_handler("min(level, 1)"),
             Expr::Call {
                 callee: "min".into(),
-                args: vec![Expr::Ident("level".into()), Expr::Int(1)]
+                args: vec![
+                    CallArg::Positional(Expr::Ident("level".into())),
+                    CallArg::Positional(Expr::Int(1)),
+                ],
             }
         );
+    }
+
+    #[test]
+    fn parses_call_with_named_arg() {
+        assert_eq!(
+            parse_expr_in_handler("filter(by: c)"),
+            Expr::Call {
+                callee: "filter".into(),
+                args: vec![CallArg::Named {
+                    name: "by".into(),
+                    value: Expr::Ident("c".into()),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_call_with_mixed_args() {
+        let e = parse_expr_in_handler("rank(traces, by: weight)");
+        if let Expr::Call { args, .. } = e {
+            assert!(matches!(args[0], CallArg::Positional(_)));
+            assert!(matches!(args[1], CallArg::Named { .. }));
+        } else {
+            panic!("expected Call");
+        }
+    }
+
+    // --- Field access ---
+
+    #[test]
+    fn parses_single_field_access() {
+        assert_eq!(
+            parse_expr_in_handler("c.weight"),
+            Expr::FieldAccess {
+                object: Box::new(Expr::Ident("c".into())),
+                field: "weight".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_chained_field_access_left_associative() {
+        // a.b.c == (a.b).c
+        let e = parse_expr_in_handler("a.b.c");
+        if let Expr::FieldAccess { object, field } = &e {
+            assert_eq!(field, "c");
+            assert!(matches!(**object, Expr::FieldAccess { .. }));
+        } else {
+            panic!("expected outer FieldAccess");
+        }
+    }
+
+    #[test]
+    fn parses_field_access_in_named_arg() {
+        // The full lightsaber move: rank(by: c.weight)
+        let e = parse_expr_in_handler("rank(by: c.weight)");
+        if let Expr::Call { args, .. } = e {
+            match &args[0] {
+                CallArg::Named { name, value } => {
+                    assert_eq!(name, "by");
+                    assert!(matches!(value, Expr::FieldAccess { .. }));
+                }
+                other => panic!("expected Named, got {other:?}"),
+            }
+        } else {
+            panic!("expected Call");
+        }
+    }
+
+    #[test]
+    fn parses_full_pipe_chain() {
+        // The canonical lightsaber chain
+        let e = parse_expr_in_handler("traces |> filter(by: c) |> rank(by: c.weight)");
+        // Outer is the second pipe
+        if let Expr::Binary(BinOp::Pipe, lhs, rhs) = &e {
+            assert!(matches!(**lhs, Expr::Binary(BinOp::Pipe, ..)));
+            assert!(matches!(**rhs, Expr::Call { .. }));
+        } else {
+            panic!("expected outer Pipe, got {e:?}");
+        }
     }
 
     #[test]

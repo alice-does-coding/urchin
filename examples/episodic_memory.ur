@@ -1,9 +1,11 @@
 /// episodic_memory.ur — the urchin's first dogfood role from the
 /// research domain. an EpisodicMemory records events as they happen
-/// and replies to cues with the episodes it remembers.
+/// and replies to cues with the episodes it remembers, ranked by the
+/// cue's weight.
 ///
-/// `Episode` is an opaque path here because record types don't exist
-/// in the grammar yet — the Episode shape will fill in when §2 lands.
+/// `Episode`, `Event`, `Cue`, `Unit` are opaque paths here because
+/// record types don't exist in the grammar yet — those shapes fill in
+/// when §2 lands.
 
 role EpisodicMemory {
   record: Event -> Unit
@@ -16,6 +18,9 @@ role EpisodicMemory {
   }
 
   on Cue c {
-    reply episodes
+    matches = episodes
+      |> filter(by: c)
+      |> rank(by: c.weight)
+    reply matches
   }
 }
