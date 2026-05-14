@@ -9,7 +9,10 @@ use chumsky::prelude::*;
 use chumsky::span::SimpleSpan;
 
 /// Tokens for the current Urchin subset. Grows as the grammar grows.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Only `PartialEq` is derived — `f64` in `FloatLit` rules out `Eq`/`Hash`,
+/// which is fine since chumsky's `just(...)` only needs `PartialEq`.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     /// `role`
     KwRole,
@@ -35,6 +38,10 @@ pub enum Token {
     Ident(String),
     /// Integer literal.
     IntLit(i64),
+    /// Float literal — `0.01`, `1.0`, `42.5`. Always has a decimal point.
+    FloatLit(f64),
+    /// String literal — `"hello"`, with `\\` `\"` `\n` `\t` `\r` escapes.
+    StrLit(String),
     /// `~`
     Tilde,
     /// `:`
@@ -47,8 +54,12 @@ pub enum Token {
     Lt,
     /// `>` — greater-than
     Gt,
-    /// `+` — addition (the only arithmetic op for now)
+    /// `+`
     Plus,
+    /// `-`
+    Minus,
+    /// `*`
+    Star,
     /// `,`
     Comma,
     /// `->` — function-type / value-flow arrow
@@ -97,6 +108,8 @@ impl fmt::Display for Token {
             Token::KwBroadcast => "broadcast",
             Token::Ident(name) => return write!(f, "{name}"),
             Token::IntLit(n) => return write!(f, "{n}"),
+            Token::FloatLit(n) => return write!(f, "{n}"),
+            Token::StrLit(s) => return write!(f, "\"{s}\""),
             Token::Tilde => "~",
             Token::Colon => ":",
             Token::Equals => "=",
@@ -104,6 +117,8 @@ impl fmt::Display for Token {
             Token::Lt => "<",
             Token::Gt => ">",
             Token::Plus => "+",
+            Token::Minus => "-",
+            Token::Star => "*",
             Token::Comma => ",",
             Token::Arrow => "->",
             Token::TildeArrow => "~>",
@@ -150,9 +165,30 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
         other => Token::Ident(other.to_string()),
     });
 
+    // Float beats int — `1.0` should not lex as `IntLit(1) Dot IntLit(0)`.
+    let float = text::int(10)
+        .then(just('.').then(text::digits(10)))
+        .to_slice()
+        .map(|s: &str| Token::FloatLit(s.parse().expect("lexed float parses as f64")));
+
     let int = text::int(10)
         .to_slice()
         .map(|s: &str| Token::IntLit(s.parse().expect("lexed digits parse as i64")));
+
+    // Standard escape set: `\\` `\"` `\n` `\t` `\r`.
+    let escape = just('\\').ignore_then(choice((
+        just('\\').to('\\'),
+        just('"').to('"'),
+        just('n').to('\n'),
+        just('t').to('\t'),
+        just('r').to('\r'),
+    )));
+    let string = none_of::<_, _, extra::Err<Rich<'src, char>>>("\\\"")
+        .or(escape)
+        .repeated()
+        .collect::<String>()
+        .delimited_by(just('"'), just('"'))
+        .map(Token::StrLit);
 
     // Multi-char operators must beat their single-char prefixes — `~>` before
     // `~`, `|>` before any future `|`, `->` before any future `-`, `==` before `=`.
@@ -167,6 +203,8 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
         just('<').to(Token::Lt),
         just('>').to(Token::Gt),
         just('+').to(Token::Plus),
+        just('-').to(Token::Minus),
+        just('*').to(Token::Star),
         just(',').to(Token::Comma),
         just('{').to(Token::LBrace),
         just('}').to(Token::RBrace),
@@ -178,7 +216,9 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
         just('.').to(Token::Dot),
     ));
 
-    let token = choice((int, ident, punct));
+    // Order matters: float beats int (so `1.0` doesn't lex as `1 . 0`),
+    // string ahead of everything else just for clarity.
+    let token = choice((string, float, int, ident, punct));
 
     token
         .map_with(|tok, e| (tok, e.span()))
@@ -427,6 +467,44 @@ mod tests {
         // `///` is matched as a comment by the outer padding pass,
         // so it never produces three Slash tokens.
         assert_eq!(toks("/// hi\n42"), vec![Token::IntLit(42)]);
+    }
+
+    #[test]
+    fn lexes_float_literal() {
+        assert_eq!(toks("0.01"), vec![Token::FloatLit(0.01)]);
+        assert_eq!(toks("1.0 42.5"), vec![Token::FloatLit(1.0), Token::FloatLit(42.5)]);
+    }
+
+    #[test]
+    fn float_beats_int_dot_int() {
+        // `1.0` must be one FloatLit, not `IntLit(1) Dot IntLit(0)`.
+        assert_eq!(toks("1.0"), vec![Token::FloatLit(1.0)]);
+    }
+
+    #[test]
+    fn int_alone_still_lexes_as_int() {
+        assert_eq!(toks("42"), vec![Token::IntLit(42)]);
+    }
+
+    #[test]
+    fn lexes_string_literal() {
+        assert_eq!(toks("\"hello\""), vec![Token::StrLit("hello".into())]);
+    }
+
+    #[test]
+    fn lexes_string_with_escapes() {
+        assert_eq!(
+            toks(r#""he said \"hi\"\n""#),
+            vec![Token::StrLit("he said \"hi\"\n".into())]
+        );
+    }
+
+    #[test]
+    fn lexes_arithmetic_ops() {
+        assert_eq!(
+            toks("+ - * /"),
+            vec![Token::Plus, Token::Minus, Token::Star, Token::Slash]
+        );
     }
 
     #[test]

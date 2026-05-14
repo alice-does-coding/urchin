@@ -8,12 +8,12 @@
 /// composition creates ambiguity.
 
 role Hunger {
-  ~ level: int
+  ~ level: float
 
   on Tick {
-    level = level ~> level + 1
-    if level > 7 {
-      broadcast Wants
+    level = level ~> level + 0.01
+    if level > 0.7 {
+      broadcast Wants("food")
     }
   }
 }

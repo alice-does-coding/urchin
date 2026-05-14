@@ -236,8 +236,9 @@ where
 ///   `~>`             (right-assoc, lowest)
 ///   `|>`             (left-assoc)
 ///   `<` `>` `==`     (left-assoc, comparison)
-///   `+`              (left-assoc)
-///   call / atom      (highest)
+///   `+` `-`          (left-assoc, additive)
+///   `*` `/`          (left-assoc, multiplicative)
+///   `.field` access / call / atom (highest)
 ///
 /// `~>` is right-associative because `a ~> b ~> c` semantically chains
 /// state-shift transformations; left-assoc would imply collapsing earlier.
@@ -247,6 +248,8 @@ where
 {
     recursive(|expr| {
         let int = select! { Token::IntLit(n) => Expr::Int(n) };
+        let float = select! { Token::FloatLit(n) => Expr::Float(n) };
+        let string = select! { Token::StrLit(s) => Expr::Str(s) };
         let ident = select! { Token::Ident(n) => Expr::Ident(n) };
         let name = select! { Token::Ident(n) => n };
 
@@ -286,8 +289,10 @@ where
             .map(Expr::List);
 
         // Try `call` before bare `ident` — both start with `Ident`,
-        // and chumsky picks the first-matching branch.
-        let primary = choice((int, call, ident, list, parens));
+        // and chumsky picks the first-matching branch. `float` is tried
+        // before `int` because the lexer already separates them; the order
+        // here just keeps `parse(...)` predictable.
+        let primary = choice((float, int, string, call, ident, list, parens));
 
         // Field access: `.field` chained any number of times after a primary.
         // Left-associative: `a.b.c` parses as `(a.b).c`.
@@ -300,13 +305,27 @@ where
             },
         );
 
-        // `+` (left-assoc, tightest binary op).
-        let add = atom.clone().foldl(
-            just(Token::Plus).ignore_then(atom).repeated(),
-            |lhs, rhs| Expr::Binary(BinOp::Add, Box::new(lhs), Box::new(rhs)),
+        // Multiplicative (`*`, `/`) — left-assoc, tightest binary level.
+        let mul_op = choice((
+            just(Token::Star).to(BinOp::Mul),
+            just(Token::Slash).to(BinOp::Div),
+        ));
+        let mul = atom.clone().foldl(
+            mul_op.then(atom).repeated(),
+            |lhs, (op, rhs)| Expr::Binary(op, Box::new(lhs), Box::new(rhs)),
         );
 
-        // Comparison (`<`, `>`, `==`) — left-assoc, between `+` and `|>`.
+        // Additive (`+`, `-`) — left-assoc, between mul and comparison.
+        let add_op = choice((
+            just(Token::Plus).to(BinOp::Add),
+            just(Token::Minus).to(BinOp::Sub),
+        ));
+        let add = mul.clone().foldl(
+            add_op.then(mul).repeated(),
+            |lhs, (op, rhs)| Expr::Binary(op, Box::new(lhs), Box::new(rhs)),
+        );
+
+        // Comparison (`<`, `>`, `==`) — left-assoc, between `+ -` and `|>`.
         let cmp_op = choice((
             just(Token::Lt).to(BinOp::Lt),
             just(Token::Gt).to(BinOp::Gt),
@@ -965,6 +984,63 @@ mod tests {
             assert!(matches!(**to, TypeExpr::List(_)));
         } else {
             panic!("expected Function type");
+        }
+    }
+
+    // --- Floats, strings, arithmetic ---
+
+    #[test]
+    fn parses_float_literal() {
+        assert_eq!(parse_expr_in_handler("0.01"), Expr::Float(0.01));
+    }
+
+    #[test]
+    fn parses_string_literal() {
+        assert_eq!(parse_expr_in_handler("\"hello\""), Expr::Str("hello".into()));
+    }
+
+    #[test]
+    fn parses_subtraction() {
+        assert!(matches!(
+            parse_expr_in_handler("level - 1"),
+            Expr::Binary(BinOp::Sub, _, _)
+        ));
+    }
+
+    #[test]
+    fn parses_multiplication() {
+        assert!(matches!(
+            parse_expr_in_handler("level * 2"),
+            Expr::Binary(BinOp::Mul, _, _)
+        ));
+    }
+
+    #[test]
+    fn parses_division() {
+        assert!(matches!(
+            parse_expr_in_handler("level / 2"),
+            Expr::Binary(BinOp::Div, _, _)
+        ));
+    }
+
+    #[test]
+    fn multiplicative_binds_tighter_than_additive() {
+        // `1 + 2 * 3` parses as `1 + (2 * 3)`
+        let e = parse_expr_in_handler("1 + 2 * 3");
+        if let Expr::Binary(BinOp::Add, _, rhs) = &e {
+            assert!(matches!(**rhs, Expr::Binary(BinOp::Mul, ..)));
+        } else {
+            panic!("expected Add as outer, got {e:?}");
+        }
+    }
+
+    #[test]
+    fn float_arithmetic() {
+        let e = parse_expr_in_handler("level + 0.01");
+        if let Expr::Binary(BinOp::Add, _, rhs) = &e {
+            assert_eq!(**rhs, Expr::Float(0.01));
+        } else {
+            panic!("expected Add, got {e:?}");
         }
     }
 

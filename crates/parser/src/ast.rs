@@ -5,7 +5,7 @@
 
 /// A `Module` holds the top-level declarations from one source file.
 /// Roles and actors can appear in any order.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Module {
     pub roles: Vec<RoleDecl>,
     pub actors: Vec<ActorDecl>,
@@ -47,7 +47,7 @@ pub struct IoSpine {
 /// A role body has up to three sections in order: interface, state, handlers.
 /// Per SPEC.md §3.1 each section is optional and identified by syntactic shape
 /// (interface = bare `name:`, state = `~ name:`, handler = `on Type`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RoleDecl {
     pub name: String,
     pub interface: Vec<InterfaceMethod>,
@@ -68,7 +68,7 @@ pub struct StateField {
 }
 
 /// `on TypePath binding? { stmt* }`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Handler {
     pub message_type: Vec<String>,
     pub binding: Option<String>,
@@ -76,7 +76,7 @@ pub struct Handler {
 }
 
 /// Statements appear inside handler bodies.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     /// `name = expr` — a local binding if `expr` has no `~>`, a state
     /// mutation if it does. Distinction left to the typechecker.
@@ -96,9 +96,14 @@ pub enum Stmt {
     ExprStmt(Expr),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Only `PartialEq` is derivable (not `Eq`) because `Float` carries an `f64`.
+/// Tests use `assert_eq!` on whole `Expr` values, which works through
+/// `PartialEq`; downstream code that needs `Eq` should normalise floats first.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Int(i64),
+    Float(f64),
+    Str(String),
     Ident(String),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     /// `name(arg, arg, ...)` — args can mix positional and `name: expr`.
@@ -112,7 +117,7 @@ pub enum Expr {
 
 /// A call argument is either positional (`filter(c)`) or named
 /// (`filter(by: c)`). The compiler may require named args for some methods.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CallArg {
     Positional(Expr),
     Named { name: String, value: Expr },
@@ -122,6 +127,12 @@ pub enum CallArg {
 pub enum BinOp {
     /// `+`
     Add,
+    /// `-`
+    Sub,
+    /// `*`
+    Mul,
+    /// `/`
+    Div,
     /// `<`
     Lt,
     /// `>`
