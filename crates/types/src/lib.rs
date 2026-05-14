@@ -1,13 +1,20 @@
-//! Urchin typechecker — first slice: composition completeness.
+//! Urchin typechecker — composition completeness + dispatch coverage.
 //!
-//! For each actor, find every message type that can flow through it
-//! (broadcasts emitted by composed roles + handlers declared by composed
-//! roles), and require that every emitted broadcast has at least one
-//! handler in some composed role of the same actor. If not, error.
+//! Two checks today, both per-actor:
 //!
-//! IO-spine events aren't yet checked because the parser doesn't carry
-//! a model of which events each `io.<kind>.*` module produces. That
-//! lands when the IO module signatures are formalized (see SPEC §6).
+//! 1. **Composition completeness** — every broadcast emitted by some
+//!    composed role must have a handler in some composed role of the
+//!    same actor. Catches silent-event-loss.
+//!
+//! 2. **Dispatch coverage** — when 2+ composed roles handle the same
+//!    message type, the actor MUST declare an `on <spine>.<event> <mode>`
+//!    dispatch (parallel / async / sequence). The match-up between
+//!    `spine.event` and the message type is by name (event name == type
+//!    name); good enough until IO module signatures are formalized.
+//!
+//! IO-spine events aren't yet checked for handler coverage because the
+//! parser doesn't carry a model of which events each `io.<kind>.*`
+//! module produces — see SPEC §6.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -34,6 +41,7 @@ pub fn check(module: &Module) -> Result<(), Vec<CheckError>> {
     let mut errors = Vec::new();
     for actor in &module.actors {
         check_composition_completeness(actor, &role_index, &mut errors);
+        check_dispatch_coverage(actor, &role_index, &mut errors);
     }
 
     if errors.is_empty() {
@@ -117,6 +125,69 @@ fn walk_broadcasts<F: FnMut(&Vec<String>, &Range<usize>)>(stmt: &Stmt, f: &mut F
         // walking through expression-level statement bodies lands when match
         // arm-body recursion is added in a follow-up.
         Stmt::Assign { .. } | Stmt::Reply(_) | Stmt::ExprStmt(_) => {}
+    }
+}
+
+/// When 2+ composed roles handle the same message type, the actor must
+/// declare an `on <spine>.<event> <mode>` dispatch — no implicit default.
+/// The spine.event ↔ message-type match-up is by name (event name equals
+/// type name); good enough until IO module signatures are formalized.
+fn check_dispatch_coverage(
+    actor: &ActorDecl,
+    role_index: &HashMap<&str, &RoleDecl>,
+    errors: &mut Vec<CheckError>,
+) {
+    let composed: Vec<&RoleDecl> = actor
+        .role_instances
+        .iter()
+        .filter_map(|inst| role_index.get(inst.name.as_str()).copied())
+        .collect();
+
+    // Build map: message_type -> set of role-instance names that handle it.
+    let mut handlers_by_type: HashMap<Vec<String>, HashSet<String>> = HashMap::new();
+    for r in &composed {
+        for h in &r.handlers {
+            handlers_by_type
+                .entry(h.message_type.clone())
+                .or_default()
+                .insert(r.name.clone());
+        }
+    }
+
+    // Set of message-type names the actor's dispatch decls cover. Dispatch
+    // events are `spine.event`; the `event` segment is the message type
+    // name we match against.
+    let dispatched_events: HashSet<&str> = actor
+        .dispatch
+        .iter()
+        .map(|d| d.event.event.as_str())
+        .collect();
+
+    for (msg_type, handler_roles) in &handlers_by_type {
+        if handler_roles.len() < 2 {
+            continue;
+        }
+        // Compare on the last segment of the message type — `tick` for
+        // a bare type, the same for `io.sim.tick`.
+        let leaf = msg_type.last().map(String::as_str).unwrap_or("");
+        if !dispatched_events.contains(leaf) {
+            let mut roles: Vec<&str> = handler_roles.iter().map(String::as_str).collect();
+            roles.sort();
+            errors.push(CheckError {
+                message: format!(
+                    "actor `{}` composes {} roles that handle `{}` ({}); a dispatch declaration `on <spine>.{} <mode>` is required",
+                    actor.name,
+                    handler_roles.len(),
+                    msg_type.join("."),
+                    roles.join(", "),
+                    leaf,
+                ),
+                // Until ActorDecl carries a span, point at file start. The
+                // error message itself names the actor and the missing
+                // dispatch precisely.
+                span: 0..0,
+            });
+        }
     }
 }
 
@@ -238,5 +309,106 @@ mod tests {
         let m = parse(src).expect("parse");
         let errs = check(&m).expect_err("should fail");
         assert_eq!(errs.len(), 3);
+    }
+
+    // --- Dispatch coverage ---
+
+    #[test]
+    fn dispatch_passes_when_two_handlers_have_explicit_dispatch() {
+        let src = "
+            role hunger { on tick {} }
+            role voice  { on tick {} }
+            actor mind {
+              clock: io.sim.clock
+              hunger(clock)
+              voice(clock)
+              on clock.tick sequence(hunger -> voice)
+            }
+        ";
+        let m = parse(src).expect("parse");
+        check(&m).expect("dispatch decl satisfies the rule");
+    }
+
+    #[test]
+    fn dispatch_fails_when_two_handlers_lack_dispatch() {
+        let src = "
+            role hunger { on tick {} }
+            role voice  { on tick {} }
+            actor mind {
+              clock: io.sim.clock
+              hunger(clock)
+              voice(clock)
+            }
+        ";
+        let m = parse(src).expect("parse");
+        let errs = check(&m).expect_err("should fail — no dispatch");
+        assert_eq!(errs.len(), 1);
+        assert!(errs[0].message.contains("tick"));
+        assert!(errs[0].message.contains("hunger"));
+        assert!(errs[0].message.contains("voice"));
+        assert!(errs[0].message.contains("dispatch"));
+    }
+
+    #[test]
+    fn dispatch_passes_when_only_one_handler() {
+        let src = "
+            role hunger { on tick {} }
+            actor mind {
+              clock: io.sim.clock
+              hunger(clock)
+            }
+        ";
+        let m = parse(src).expect("parse");
+        check(&m).expect("one handler needs no dispatch");
+    }
+
+    #[test]
+    fn dispatch_passes_with_three_handlers_and_sequence_chain() {
+        let src = "
+            role a { on tick {} }
+            role b { on tick {} }
+            role c { on tick {} }
+            actor mind {
+              clock: io.sim.clock
+              a(clock)
+              b(clock)
+              c(clock)
+              on clock.tick sequence(a -> b -> c)
+            }
+        ";
+        let m = parse(src).expect("parse");
+        check(&m).expect("three-stage sequence satisfies the rule");
+    }
+
+    #[test]
+    fn dispatch_passes_with_parallel_mode() {
+        let src = "
+            role a { on tick {} }
+            role b { on tick {} }
+            actor mind {
+              clock: io.sim.clock
+              a(clock)
+              b(clock)
+              on clock.tick parallel
+            }
+        ";
+        let m = parse(src).expect("parse");
+        check(&m).expect("parallel dispatch satisfies the rule");
+    }
+
+    #[test]
+    fn dispatch_passes_with_async_mode() {
+        let src = "
+            role a { on tick {} }
+            role b { on tick {} }
+            actor mind {
+              clock: io.sim.clock
+              a(clock)
+              b(clock)
+              on clock.tick async
+            }
+        ";
+        let m = parse(src).expect("parse");
+        check(&m).expect("async dispatch satisfies the rule");
     }
 }
