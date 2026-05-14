@@ -2,10 +2,12 @@
 /// minimal cognitive agent: an EpisodicMemory that records events,
 /// a Hunger drive that tracks need, and a Voice that signals to siblings.
 ///
-/// the actor is intentionally tiny — there is no actor-level behavior
-/// code. all algorithm is emergent from the role mix. `on Tick sequence(...)`
-/// is the only ceremony, declaring how multiple Tick handlers fire when
-/// composition creates ambiguity.
+/// the actor body has three sections in canonical order:
+///   1. IO spines (the substrate the actor talks to)
+///   2. role instances with their IO + role-to-role wiring
+///   3. orchestration (dispatch declarations on spine.event)
+///
+/// instance names are camelCase; actor names are camelCase.
 
 role Hunger {
   ~ level: float
@@ -40,13 +42,13 @@ role Voice {
   on Tick {}
 }
 
-actor Mind {
-  EpisodicMemory
-  Hunger
-  Voice
-
-  on Tick sequence(Hunger -> Voice)
-
+actor mind {
   clock:    io.sim.clock
   siblings: io.sim.comms.peer
+
+  episodicMemory(clock, siblings)
+  voice(clock)(episodicMemory -> recall)
+  hunger(clock)
+
+  on clock.tick sequence(hunger -> voice)
 }

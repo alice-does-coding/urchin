@@ -11,30 +11,63 @@ pub struct Module {
     pub actors: Vec<ActorDecl>,
 }
 
-/// An actor is minimal per SPEC.md §0.1: composed roles, optional dispatch
-/// declarations (when 2+ composed roles handle the same message type), and
-/// declared IO spines. No actor-level behavior code.
+/// An actor declaration. Body has three sections in canonical order:
+/// IO spines first (the substrate), then role instances with their
+/// IO + role-to-role wiring (who's plugged into what), then dispatch
+/// declarations (how races resolve). No actor-level behavior code.
+///
+/// Actor names are camelCase per the language convention; role instance
+/// names are also camelCase (typically the case-shifted form of the
+/// PascalCase role they instantiate).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActorDecl {
     pub name: String,
-    pub composed_roles: Vec<Vec<String>>,
-    pub dispatch: Vec<DispatchDecl>,
     pub io_spines: Vec<IoSpine>,
+    pub role_instances: Vec<RoleInstance>,
+    pub dispatch: Vec<DispatchDecl>,
 }
 
-/// `on TypePath <mode>` — how to fire when 2+ composed roles handle the same type.
+/// `name(io_arg, ...)(source -> method, ...)` — a composed role instance.
+/// First parens lists the IO spines this instance can talk to. Second
+/// parens (optional) wires interface methods this instance needs to
+/// methods provided by sibling instances.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleInstance {
+    pub name: String,
+    pub io_args: Vec<String>,
+    pub wires: Vec<RoleWire>,
+}
+
+/// `source -> method` — a wire from this instance's needed method to
+/// the same-named method on the named source instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleWire {
+    pub source: String,
+    pub method: String,
+}
+
+/// `on spine.event <mode>` — dispatch keys on the spine-qualified event,
+/// not the bare message type. Same message type from different spines can
+/// dispatch differently.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchDecl {
-    pub message_type: Vec<String>,
+    pub event: SpineEvent,
     pub mode: DispatchMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpineEvent {
+    pub spine: String,
+    pub event: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchMode {
     Parallel,
     Async,
-    /// `sequence(A -> B -> C)` — handlers fire in declared order.
-    Sequence(Vec<Vec<String>>),
+    /// `sequence(a -> b -> c)` — instances fire in declared order. Names
+    /// are role-instance names (lowercase camelCase), not type paths.
+    Sequence(Vec<String>),
 }
 
 /// `name: io.<path>` — a typed channel into the world (sim or real).

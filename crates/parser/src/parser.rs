@@ -9,7 +9,7 @@ use chumsky::prelude::*;
 
 use crate::ast::{
     ActorDecl, BinOp, CallArg, DispatchDecl, DispatchMode, Expr, Handler, InterfaceMethod, IoSpine,
-    Module, RoleDecl, StateField, Stmt, TypeExpr,
+    Module, RoleDecl, RoleInstance, RoleWire, SpineEvent, StateField, Stmt, TypeExpr,
 };
 use crate::lexer::{lex, Span, Token};
 use crate::ParseError;
@@ -353,40 +353,78 @@ where
     })
 }
 
-/// `ActorDecl` ::= `actor` Ident `{` (RoleCompose | DispatchDecl | IoSpine)* `}`
+/// `ActorDecl` ::= `actor` ident `{` IoSpine* RoleInstance* DispatchDecl* `}`
 ///
-/// The three body item kinds are identified by syntactic shape:
-/// - `RoleCompose`  := bare TypePath (e.g. `Memory.Associative`)
-/// - `DispatchDecl` := `on` TypePath (`parallel` | `async` | `sequence(...)`)
-/// - `IoSpine`      := lower_ident `:` `io.<path>`
+/// Body sections are strictly ordered per SPEC.md (§4 sketch / 2026-05-14):
+/// IO spines first (the substrate the actor talks to), then role instances
+/// with their IO + role-to-role wiring, then dispatch declarations. Each
+/// section can be empty. Order is enforced — an IO spine after a role
+/// instance is a parse error.
 ///
-/// Items can appear in any order; the AST collects them into three vectors.
+/// `IoSpine`      := ident `:` `io.<path>`
+/// `RoleInstance` := ident `(` ident_list? `)` ( `(` wire_list? `)` )?
+/// `Wire`         := ident `->` ident
+/// `DispatchDecl` := `on` ident `.` ident DispatchMode
 fn actor_decl_parser<'src, I>(
 ) -> impl Parser<'src, I, ActorDecl, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
-    enum BodyItem {
-        Role(Vec<String>),
-        Dispatch(DispatchDecl),
-        Spine(IoSpine),
-    }
-
     let segment = select! { Token::Ident(n) => n };
     let actor_name = select! { Token::Ident(n) => n };
 
-    let dotted = segment
+    // IO spine: `name : io.<path>`. The colon distinguishes it from a
+    // role instance (which uses `(`).
+    let io_path = segment
         .clone()
         .separated_by(just(Token::Dot))
         .at_least(1)
         .collect::<Vec<_>>();
+    let io_spine = segment
+        .clone()
+        .then_ignore(just(Token::Colon))
+        .then(io_path)
+        .map(|(name, io_path)| IoSpine { name, io_path });
 
+    // Role instance: `name(io_args)(wires)?`. The `(` distinguishes it
+    // from an IO spine (which uses `:`).
+    let ident_list = segment
+        .clone()
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LParen), just(Token::RParen));
+    let wire = segment
+        .clone()
+        .then_ignore(just(Token::Arrow))
+        .then(segment.clone())
+        .map(|(source, method)| RoleWire { source, method });
+    let wire_list = wire
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LParen), just(Token::RParen))
+        .or_not()
+        .map(Option::unwrap_or_default);
+    let role_instance = segment
+        .clone()
+        .then(ident_list)
+        .then(wire_list)
+        .map(|((name, io_args), wires)| RoleInstance { name, io_args, wires });
+
+    // Dispatch decl: `on spine.event <mode>`. The `on` keyword
+    // distinguishes it from a role instance.
+    let spine_event = segment
+        .clone()
+        .then_ignore(just(Token::Dot))
+        .then(segment.clone())
+        .map(|(spine, event)| SpineEvent { spine, event });
     let dispatch_mode = choice((
         just(Token::KwParallel).to(DispatchMode::Parallel),
         just(Token::KwAsync).to(DispatchMode::Async),
         just(Token::KwSequence)
             .ignore_then(
-                dotted
+                segment
                     .clone()
                     .separated_by(just(Token::Arrow))
                     .at_least(1)
@@ -395,48 +433,27 @@ where
             )
             .map(DispatchMode::Sequence),
     ));
-
     let dispatch = just(Token::KwOn)
-        .ignore_then(dotted.clone())
+        .ignore_then(spine_event)
         .then(dispatch_mode)
-        .map(|(message_type, mode)| BodyItem::Dispatch(DispatchDecl { message_type, mode }));
+        .map(|(event, mode)| DispatchDecl { event, mode });
 
-    let io_spine = segment
-        .clone()
-        .then_ignore(just(Token::Colon))
-        .then(dotted.clone())
-        .map(|(name, io_path)| BodyItem::Spine(IoSpine { name, io_path }));
-
-    // A bare dotted path (no following `:` and no preceding `on`) is a role
-    // composition. Tried last because the more-specific shapes share its
-    // leading-token shape.
-    let role_compose = dotted.map(BodyItem::Role);
-
-    let body_item = choice((dispatch, io_spine, role_compose));
+    // Body in strict section order: spines, then instances, then dispatch.
+    let body = io_spine
+        .repeated()
+        .collect::<Vec<_>>()
+        .then(role_instance.repeated().collect::<Vec<_>>())
+        .then(dispatch.repeated().collect::<Vec<_>>())
+        .delimited_by(just(Token::LBrace), just(Token::RBrace));
 
     just(Token::KwActor)
         .ignore_then(actor_name)
-        .then(
-            body_item
-                .repeated()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
-        .map(|(name, items)| {
-            let mut decl = ActorDecl {
-                name,
-                composed_roles: vec![],
-                dispatch: vec![],
-                io_spines: vec![],
-            };
-            for item in items {
-                match item {
-                    BodyItem::Role(r) => decl.composed_roles.push(r),
-                    BodyItem::Dispatch(d) => decl.dispatch.push(d),
-                    BodyItem::Spine(s) => decl.io_spines.push(s),
-                }
-            }
-            decl
+        .then(body)
+        .map(|(name, ((io_spines, role_instances), dispatch))| ActorDecl {
+            name,
+            io_spines,
+            role_instances,
+            dispatch,
         })
 }
 
@@ -1147,34 +1164,17 @@ mod tests {
 
     #[test]
     fn parses_empty_actor() {
-        let a = first_actor("actor Mind {}");
-        assert_eq!(a.name, "Mind");
-        assert!(a.composed_roles.is_empty());
-        assert!(a.dispatch.is_empty());
+        let a = first_actor("actor mind {}");
+        assert_eq!(a.name, "mind");
         assert!(a.io_spines.is_empty());
-    }
-
-    #[test]
-    fn parses_actor_with_composed_roles() {
-        let a = first_actor(
-            "actor Mind {
-               Memory.Associative
-               Hunger
-               Voice
-             }",
-        );
-        assert_eq!(a.composed_roles.len(), 3);
-        assert_eq!(
-            a.composed_roles[0],
-            vec!["Memory".to_string(), "Associative".to_string()]
-        );
-        assert_eq!(a.composed_roles[1], vec!["Hunger".to_string()]);
+        assert!(a.role_instances.is_empty());
+        assert!(a.dispatch.is_empty());
     }
 
     #[test]
     fn parses_actor_with_io_spines() {
         let a = first_actor(
-            "actor Mind {
+            "actor mind {
                http: io.http.server
                clock: io.sim.clock
              }",
@@ -1188,55 +1188,153 @@ mod tests {
     }
 
     #[test]
+    fn parses_role_instance_with_io_args() {
+        let a = first_actor(
+            "actor mind {
+               clock: io.sim.clock
+               hunger(clock)
+             }",
+        );
+        assert_eq!(a.role_instances.len(), 1);
+        let inst = &a.role_instances[0];
+        assert_eq!(inst.name, "hunger");
+        assert_eq!(inst.io_args, vec!["clock".to_string()]);
+        assert!(inst.wires.is_empty());
+    }
+
+    #[test]
+    fn parses_role_instance_with_multiple_io_args() {
+        let a = first_actor(
+            "actor mind {
+               clock: io.sim.clock
+               siblings: io.sim.comms.peer
+               episodicMemory(clock, siblings)
+             }",
+        );
+        let inst = &a.role_instances[0];
+        assert_eq!(inst.io_args, vec!["clock".to_string(), "siblings".to_string()]);
+    }
+
+    #[test]
+    fn parses_role_instance_with_wires() {
+        let a = first_actor(
+            "actor mind {
+               clock: io.sim.clock
+               episodicMemory(clock)
+               voice(clock)(episodicMemory -> recall)
+             }",
+        );
+        let voice = &a.role_instances[1];
+        assert_eq!(voice.name, "voice");
+        assert_eq!(voice.wires.len(), 1);
+        assert_eq!(voice.wires[0].source, "episodicMemory");
+        assert_eq!(voice.wires[0].method, "recall");
+    }
+
+    #[test]
+    fn parses_role_instance_with_multiple_wires() {
+        let a = first_actor(
+            "actor mind {
+               clock: io.sim.clock
+               mem(clock)
+               other(clock)
+               voice(clock)(mem -> recall, other -> store)
+             }",
+        );
+        let voice = a.role_instances.last().unwrap();
+        assert_eq!(voice.wires.len(), 2);
+        assert_eq!(voice.wires[0].source, "mem");
+        assert_eq!(voice.wires[1].source, "other");
+    }
+
+    #[test]
     fn parses_dispatch_parallel() {
-        let a = first_actor("actor X { on Stimulus parallel }");
+        let a = first_actor(
+            "actor mind {
+               clock: io.sim.clock
+               on clock.tick parallel
+             }",
+        );
         assert_eq!(a.dispatch.len(), 1);
+        assert_eq!(a.dispatch[0].event.spine, "clock");
+        assert_eq!(a.dispatch[0].event.event, "tick");
         assert_eq!(a.dispatch[0].mode, DispatchMode::Parallel);
     }
 
     #[test]
     fn parses_dispatch_async() {
-        let a = first_actor("actor X { on Cue async }");
+        let a = first_actor(
+            "actor mind {
+               siblings: io.sim.comms.peer
+               on siblings.message async
+             }",
+        );
         assert_eq!(a.dispatch[0].mode, DispatchMode::Async);
     }
 
     #[test]
-    fn parses_dispatch_sequence() {
-        let a = first_actor("actor X { on Tick sequence(Voice -> NegativeBias) }");
+    fn parses_dispatch_sequence_with_lowercase_instances() {
+        let a = first_actor(
+            "actor mind {
+               clock: io.sim.clock
+               hunger(clock)
+               voice(clock)
+               on clock.tick sequence(hunger -> voice)
+             }",
+        );
         match &a.dispatch[0].mode {
-            DispatchMode::Sequence(roles) => {
-                assert_eq!(roles.len(), 2);
-                assert_eq!(roles[0], vec!["Voice".to_string()]);
-                assert_eq!(roles[1], vec!["NegativeBias".to_string()]);
+            DispatchMode::Sequence(insts) => {
+                assert_eq!(insts, &vec!["hunger".to_string(), "voice".to_string()]);
             }
             other => panic!("expected Sequence, got {other:?}"),
         }
     }
 
     #[test]
-    fn parses_actor_with_all_three_kinds() {
+    fn parses_actor_with_all_three_sections() {
         let a = first_actor(
-            "actor Mind {
-               Memory.Associative
-               Hunger
-               Voice
-
-               on Tick sequence(Voice -> Memory.Associative)
-
-               http: io.http.server
+            "actor mind {
+               clock:    io.sim.clock
                siblings: io.sim.comms.peer
+
+               episodicMemory(clock, siblings)
+               voice(clock)(episodicMemory -> recall)
+               hunger(clock)
+
+               on clock.tick sequence(hunger -> voice)
              }",
         );
-        assert_eq!(a.composed_roles.len(), 3);
-        assert_eq!(a.dispatch.len(), 1);
         assert_eq!(a.io_spines.len(), 2);
+        assert_eq!(a.role_instances.len(), 3);
+        assert_eq!(a.dispatch.len(), 1);
+        assert_eq!(a.role_instances[1].wires[0].source, "episodicMemory");
+    }
+
+    #[test]
+    fn role_instance_after_dispatch_is_a_parse_error() {
+        // Section order: spines, then instances, then dispatch — strict.
+        let src = "actor mind {
+                     clock: io.sim.clock
+                     on clock.tick parallel
+                     hunger(clock)
+                   }";
+        assert!(parse(src).is_err());
+    }
+
+    #[test]
+    fn io_spine_after_role_instance_is_a_parse_error() {
+        let src = "actor mind {
+                     hunger(clock)
+                     clock: io.sim.clock
+                   }";
+        assert!(parse(src).is_err());
     }
 
     #[test]
     fn module_can_hold_roles_and_actors_together() {
         let m = parse(
             "role Hunger { ~ level: int }
-             actor Mind { Hunger  http: io.http.server }",
+             actor mind { clock: io.sim.clock  hunger(clock) }",
         )
         .expect("parse");
         assert_eq!(m.roles.len(), 1);
