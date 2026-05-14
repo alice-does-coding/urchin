@@ -6,9 +6,11 @@
 pub mod ast;
 pub mod lexer;
 pub mod parser;
+pub mod printer;
 
 pub use ast::*;
 pub use parser::parse;
+pub use printer::format;
 
 /// Parse error — currently a thin wrapper around a message + char range.
 /// Will grow into a proper diagnostic type once we wire ariadne or miette.

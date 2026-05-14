@@ -24,15 +24,22 @@ enum Cmd {
         /// Path to the source file.
         file: PathBuf,
     },
+    /// Parse and pretty-print a `.ur` source file in canonical form.
+    Format {
+        /// Path to the source file.
+        file: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.command {
-        Cmd::Parse { file } => match run_parse(&file) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(code) => code,
-        },
+    let result = match cli.command {
+        Cmd::Parse { file } => run_parse(&file),
+        Cmd::Format { file } => run_format(&file),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(code) => code,
     }
 }
 
@@ -45,6 +52,27 @@ fn run_parse(file: &Path) -> Result<(), ExitCode> {
     match urchin_parser::parse(&source) {
         Ok(module) => {
             println!("{module:#?}");
+            Ok(())
+        }
+        Err(errors) => {
+            let source_id = file.display().to_string();
+            for err in errors {
+                render_error(&source_id, &source, &err);
+            }
+            Err(ExitCode::from(1))
+        }
+    }
+}
+
+fn run_format(file: &Path) -> Result<(), ExitCode> {
+    let source = std::fs::read_to_string(file).map_err(|e| {
+        eprintln!("urchin: cannot read {}: {e}", file.display());
+        ExitCode::from(2)
+    })?;
+
+    match urchin_parser::parse(&source) {
+        Ok(module) => {
+            print!("{}", urchin_parser::format(&module));
             Ok(())
         }
         Err(errors) => {
