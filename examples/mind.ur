@@ -1,6 +1,10 @@
-/// mind.ur — seed corpus for urchin. two actors that demonstrate
-/// the language's shape end-to-end:
+/// mind.ur — seed corpus for urchin. file flow is small-to-large:
+/// roles first (atomic components), then the child actor (mind), then
+/// the parent actor (rubberDuck) at the bottom. the reader builds up
+/// intuition piece by piece — by the time you reach an actor, you've
+/// already seen everything it composes.
 ///
+/// two actors:
 ///   rubberDuck — a persona-level agent. listens to utterances from
 ///                the world, runs them through an LLM-backed prompter,
 ///                emits a clarifying question. has-a mind.
@@ -10,8 +14,7 @@
 ///                slot in the actor topology.
 ///
 /// the topology is read from each actor's `@ parent` clause. siblings
-/// (other children of the same parent) and children (other actors with
-/// `@ thisActor`) are inferred globally from the union of declarations.
+/// and children are inferred globally from the union of declarations.
 /// the tree is structural identity; capabilities flow through `io.*`
 /// spines, not through the parent chain.
 ///
@@ -88,6 +91,16 @@ role mouth {
   on question q {}
 }
 
+actor mind @ rubberDuck {
+  clock: io.sim.clock
+
+  episodicMemory(clock)
+  voice(clock)(episodicMemory -> recall)
+  hunger(clock)
+
+  on clock.tick sequence(hunger -> voice)
+}
+
 actor rubberDuck {
   llm:      io.anthropic.haiku
   siblings: io.sim.comms.peer
@@ -97,14 +110,4 @@ actor rubberDuck {
   mouth()
 
   on siblings.utterance sequence(listener -> prompter)
-}
-
-actor mind @ rubberDuck {
-  clock: io.sim.clock
-
-  episodicMemory(clock)
-  voice(clock)(episodicMemory -> recall)
-  hunger(clock)
-
-  on clock.tick sequence(hunger -> voice)
 }
