@@ -72,11 +72,14 @@ where
     })
 }
 
-/// `RoleDecl` ::= `role` Ident `{` InterfaceMethod* StateField* Handler* `}`
+/// `RoleDecl` ::= `role` Ident `{`
+///                   ( `/// _interface` InterfaceMethod* )?
+///                   ( `/// _state`     StateField*      )?
+///                   ( `/// _handlers`  Handler*         )?
+///                 `}`
 ///
-/// Per SPEC.md §3.1 the three sections appear in that order; each is optional.
-/// Order is enforced syntactically — a state field after a handler is a parse
-/// error, not a reorder hint.
+/// Section markers are REQUIRED when their section has content; absent
+/// when the section is empty. Sections appear in strict canonical order.
 fn role_decl_parser<'src, I>(
 ) -> impl Parser<'src, I, RoleDecl, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -84,11 +87,26 @@ where
 {
     let name = select! { Token::Ident(n) => n };
 
-    let body = interface_method_parser()
-        .repeated()
-        .collect::<Vec<_>>()
-        .then(state_field_parser().repeated().collect::<Vec<_>>())
-        .then(handler_parser().repeated().collect::<Vec<_>>())
+    // Two parsing strategies, both accepted:
+    //   (a) New canonical form — explicit `/// _state` etc. markers, no `~`
+    //   (b) Legacy form — implicit by syntactic shape, `~` on state fields
+    //
+    // Strategy (a) is tried first via section_marker; strategy (b) falls
+    // out naturally because state_field_parser tolerates `~` and interface
+    // method parser tries `name: type` shapes that don't start with `~`.
+    let interface_section = section_marker("interface")
+        .or_not()
+        .ignore_then(interface_method_parser().repeated().collect::<Vec<_>>());
+    let state_section = section_marker("state")
+        .or_not()
+        .ignore_then(state_field_parser().repeated().collect::<Vec<_>>());
+    let handlers_section = section_marker("handlers")
+        .or_not()
+        .ignore_then(handler_parser().repeated().collect::<Vec<_>>());
+
+    let body = interface_section
+        .then(state_section)
+        .then(handlers_section)
         .delimited_by(just(Token::LBrace), just(Token::RBrace));
 
     just(Token::KwRole)
@@ -104,7 +122,7 @@ where
 
 /// `InterfaceMethod` ::= Ident `:` TypeExpr
 ///
-/// Distinguished from `StateField` only by the absence of a leading `~`.
+/// Lives under the `/// _interface` section marker.
 fn interface_method_parser<'src, I>(
 ) -> impl Parser<'src, I, InterfaceMethod, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -117,19 +135,72 @@ where
         .map(|(name, ty)| InterfaceMethod { name, ty })
 }
 
-/// `StateField` ::= `~` Ident `:` TypeExpr
+/// `StateField` ::= `~`? Ident `:` TypeExpr ( `=` InitExpr )?
+///
+/// The leading `~` is OPTIONAL — required only when there's no `/// _state`
+/// section marker to disambiguate state from interface methods. The
+/// canonical form (with marker, no `~`) and the legacy form (no marker,
+/// `~` required) both parse. Optional `= init` is the value the runtime
+/// uses to seed the field on instantiation.
+///
+/// `InitExpr` is a deliberately small subset of `Expr` (literals,
+/// idents, list literals) — state initializers are declarative defaults
+/// at role-declaration time, not arbitrary computations. Keeps the
+/// parser out of the stmt↔expr mutual recursion this function lives
+/// outside of.
 fn state_field_parser<'src, I>(
 ) -> impl Parser<'src, I, StateField, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
     let name = select! { Token::Ident(n) => n };
+    let init = just(Token::Equals)
+        .ignore_then(state_init_parser())
+        .or_not();
 
     just(Token::Tilde)
+        .or_not()
         .ignore_then(name)
         .then_ignore(just(Token::Colon))
         .then(type_expr_parser())
-        .map(|(name, ty)| StateField { name, ty })
+        .then(init)
+        .map(|((name, ty), init)| StateField { name, ty, init })
+}
+
+/// `InitExpr` ::= IntLit | FloatLit | StrLit | Ident | `[` InitExpr,* `]`
+fn state_init_parser<'src, I>(
+) -> impl Parser<'src, I, Expr, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    recursive(|init| {
+        let int = select! { Token::IntLit(n) => Expr::Int(n) };
+        let float = select! { Token::FloatLit(n) => Expr::Float(n) };
+        let string = select! { Token::StrLit(s) => Expr::Str(s) };
+        let ident = select! { Token::Ident(n) => Expr::Ident(n) };
+
+        let list = init
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map(Expr::List);
+
+        choice((float, int, string, list, ident))
+    })
+}
+
+/// Match a section marker token with a specific name.
+fn section_marker<'src, I>(
+    name: &'static str,
+) -> impl Parser<'src, I, (), extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    select! {
+        Token::SectionMarker(n) if n == name => (),
+    }
 }
 
 /// `Handler` ::= `on` TypePath Ident? `{` Stmt* `}`
@@ -503,12 +574,28 @@ where
         .then(dispatch_mode)
         .map(|(event, mode)| DispatchDecl { event, mode });
 
-    // Body in strict section order: spines, then instances, then dispatch.
-    let body = io_spine
-        .repeated()
-        .collect::<Vec<_>>()
-        .then(role_instance.repeated().collect::<Vec<_>>())
-        .then(dispatch.repeated().collect::<Vec<_>>())
+    // Body in strict section order, each section marker required when its
+    // section has content, absent when empty:
+    //   /// _io                 io_spines*
+    //   /// _roles              role_instances*
+    //   /// _dispatch_scripts   dispatch_decls*
+    // Tolerant: section markers optional. Each section's items have a
+    // distinguishing leading shape (io_spine has `:`, role_instance has
+    // `(`, dispatch starts with `on`), so the parser can fall through
+    // marker-free input to the items directly.
+    let io_section = section_marker("io")
+        .or_not()
+        .ignore_then(io_spine.repeated().collect::<Vec<_>>());
+    let roles_section = section_marker("roles")
+        .or_not()
+        .ignore_then(role_instance.repeated().collect::<Vec<_>>());
+    let dispatch_section = section_marker("dispatch_scripts")
+        .or_not()
+        .ignore_then(dispatch.repeated().collect::<Vec<_>>());
+
+    let body = io_section
+        .then(roles_section)
+        .then(dispatch_section)
         .delimited_by(just(Token::LBrace), just(Token::RBrace));
 
     let parent_clause = just(Token::At).ignore_then(segment.clone()).or_not();
@@ -674,8 +761,15 @@ mod tests {
     }
 
     #[test]
-    fn state_before_interface_is_a_parse_error() {
-        let src = "role X { ~ level: int recall: Cue -> Trace }";
+    fn state_marker_before_interface_marker_is_a_parse_error() {
+        // Section markers must appear in canonical order: interface, state,
+        // handlers. Putting `/// _state` before `/// _interface` should fail
+        // because the interface section parser doesn't accept a state marker
+        // and the leftover tokens have nowhere to go.
+        let src = "role X { /// _state
+                            level: int
+                            /// _interface
+                            recall: Cue -> Trace }";
         assert!(parse(src).is_err());
     }
 

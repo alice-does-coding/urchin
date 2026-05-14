@@ -91,6 +91,14 @@ pub enum Token {
     /// `@` — actor parent declaration: `actor child @ parent { ... }`
     /// reads as "child located at parent" / "the child slot of parent."
     At,
+    /// `/// _<name>` — required section marker inside role and actor bodies.
+    /// e.g. `/// _io`, `/// _roles`, `/// _dispatch_scripts` in actors;
+    /// `/// _interface`, `/// _state`, `/// _handlers` in roles.
+    /// The name is the leading `_` plus the identifier; lexed without
+    /// the leading underscore so the token carries just `"io"`, `"state"`, etc.
+    SectionMarker(String),
+    /// Internal: regular `///` comment, filtered out before tokens reach the parser.
+    Comment,
 }
 
 pub type Span = SimpleSpan<usize>;
@@ -138,26 +146,26 @@ impl fmt::Display for Token {
             Token::Slash => "/",
             Token::Dot => ".",
             Token::At => "@",
+            Token::SectionMarker(name) => return write!(f, "/// _{name}"),
+            Token::Comment => "///",
         };
         f.write_str(s)
     }
 }
 
-/// Lex `source` into a stream of `(Token, Span)` pairs.
-///
-/// Returns `Err` with chumsky's rich diagnostics if lexing fails.
+/// Lex `source` into a stream of `(Token, Span)` pairs. Regular `///`
+/// comments are filtered out at this boundary; section markers
+/// (`/// _<name>`) survive as real tokens.
 pub fn lex(source: &str) -> Result<Vec<Spanned<Token>>, Vec<Rich<'_, char>>> {
-    lexer().parse(source).into_result()
+    lexer().parse(source).into_result().map(|toks| {
+        toks.into_iter()
+            .filter(|(t, _)| !matches!(t, Token::Comment))
+            .collect()
+    })
 }
 
 fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err<Rich<'src, char>>>
 {
-    // `///` to end-of-line (handles both single-line and the multi-line
-    // form `///\n…\n///` once we add it; for now just skip-to-newline).
-    let line_comment = just("///")
-        .then(any().and_is(just('\n').not()).repeated())
-        .padded();
-
     let ident = text::ident().map(|s: &str| match s {
         "role" => Token::KwRole,
         "actor" => Token::KwActor,
@@ -225,13 +233,34 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
         just('@').to(Token::At),
     ));
 
-    // Order matters: float beats int (so `1.0` doesn't lex as `1 . 0`),
-    // string ahead of everything else just for clarity.
-    let token = choice((string, float, int, ident, punct));
+    // `///` opens either a SECTION MARKER (`/// _<name>`) or a regular
+    // comment. Both are lexed as tokens; comments are filtered out in
+    // `lex()` before they reach the parser. Section markers survive
+    // because they ARE structural — required inside role and actor bodies.
+    //
+    // Discriminator: optional inline whitespace, then `_<ident>` = marker;
+    // anything else to end of line = comment.
+    let inline_ws = one_of(" \t").repeated();
+    let triple_slash = just("///").ignore_then(choice((
+        inline_ws
+            .clone()
+            .ignore_then(just('_'))
+            .ignore_then(text::ident())
+            .then_ignore(any().and_is(just('\n').not()).repeated())
+            .map(|name: &str| Token::SectionMarker(name.to_string())),
+        any()
+            .and_is(just('\n').not())
+            .repeated()
+            .to(Token::Comment),
+    )));
+
+    // Order matters: triple_slash before punct (so `///` isn't shadowed by `/`).
+    // Float before int (so `1.0` doesn't lex as `1 . 0`). String stays
+    // ahead for clarity.
+    let token = choice((triple_slash, string, float, int, ident, punct));
 
     token
         .map_with(|tok, e| (tok, e.span()))
-        .padded_by(line_comment.repeated())
         .padded()
         .repeated()
         .collect()
@@ -463,6 +492,57 @@ mod tests {
         assert_eq!(
             toks("parallel sequence async"),
             vec![Token::KwParallel, Token::KwSequence, Token::KwAsync]
+        );
+    }
+
+    #[test]
+    fn lexes_section_marker() {
+        assert_eq!(
+            toks("/// _io"),
+            vec![Token::SectionMarker("io".into())]
+        );
+    }
+
+    #[test]
+    fn section_marker_captures_name_without_leading_underscore() {
+        match &toks("/// _dispatch_scripts")[0] {
+            Token::SectionMarker(name) => assert_eq!(name, "dispatch_scripts"),
+            other => panic!("expected SectionMarker, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn section_marker_ignores_trailing_text_on_line() {
+        assert_eq!(
+            toks("/// _io  (the actor's substrate)"),
+            vec![Token::SectionMarker("io".into())]
+        );
+    }
+
+    #[test]
+    fn regular_comment_still_skipped() {
+        // No leading `_` after `///` → comment, filtered out by lex().
+        assert_eq!(
+            toks("/// the urchin's smallest role\nrole x {}"),
+            vec![
+                Token::KwRole,
+                Token::Ident("x".into()),
+                Token::LBrace,
+                Token::RBrace,
+            ]
+        );
+    }
+
+    #[test]
+    fn section_marker_and_following_tokens() {
+        assert_eq!(
+            toks("/// _state\nlevel: float"),
+            vec![
+                Token::SectionMarker("state".into()),
+                Token::Ident("level".into()),
+                Token::Colon,
+                Token::Ident("float".into()),
+            ]
         );
     }
 

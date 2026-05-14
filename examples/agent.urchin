@@ -1,29 +1,24 @@
-/// mind.ur — seed corpus for urchin. file flow is small-to-large:
+/// agent.urchin — seed corpus for urchin. file flow is small-to-large:
 /// roles first (atomic components), then the child actor (mind), then
 /// the parent actor (rubberDuck) at the bottom. the reader builds up
-/// intuition piece by piece — by the time you reach an actor, you've
-/// already seen everything it composes.
+/// intuition piece by piece.
 ///
-/// two actors:
-///   rubberDuck — a persona-level agent. listens to utterances from
-///                the world, runs them through an LLM-backed prompter,
-///                emits a clarifying question. has-a mind.
-///   mind       — the cognitive substrate inside rubberDuck. composes
-///                hunger + episodicMemory + voice. declared with
-///                `@ rubberDuck` to position it as rubberDuck's mind
-///                slot in the actor topology.
+/// roles and actors carry STRICT SECTION MARKERS — `/// _interface`,
+/// `/// _state`, `/// _handlers` in roles; `/// _io`, `/// _roles`,
+/// `/// _dispatch_scripts` in actors. markers make the structure
+/// visible at the syntactic level. the parser tolerates them being
+/// absent for legacy code, but idiomatic urchin always includes them.
 ///
-/// the topology is read from each actor's `@ parent` clause. siblings
-/// and children are inferred globally from the union of declarations.
-/// the tree is structural identity; capabilities flow through `io.*`
-/// spines, not through the parent chain.
-///
-/// every identifier in urchin is camelCase. the reader infers what
-/// kind of thing a name refers to from syntactic position.
+/// state fields no longer carry the `~` prefix — the `/// _state`
+/// section marker already says "everything below is state." mutations
+/// still use `~>` (the journal hook earns its keep at the runtime side).
+/// state fields can carry an optional `= init` default.
 
 role hunger {
-  ~ level: float
+  /// _state
+  level: float = 0.0
 
+  /// _handlers
   on tick {
     level = level ~> level + 0.01
     if level > 0.7 {
@@ -33,11 +28,14 @@ role hunger {
 }
 
 role episodicMemory {
+  /// _interface
   record: event -> unit
   recall: cue -> [episode]
 
-  ~ episodes: [episode]
+  /// _state
+  episodes: [episode] = []
 
+  /// _handlers
   on event e {
     episodes = episodes ~> episodes + [e]
   }
@@ -51,8 +49,10 @@ role episodicMemory {
 }
 
 role voice {
-  ~ mood: mood
+  /// _state
+  mood: mood = calm
 
+  /// _handlers
   on tick {
     match mood {
       calm     -> mood = mood ~> calm
@@ -68,18 +68,23 @@ role voice {
 }
 
 role listener {
-  ~ heard: [utterance]
+  /// _state
+  heard: [utterance] = []
 
+  /// _handlers
   on utterance u {
     heard = heard ~> heard + [u]
   }
 }
 
 role prompter {
+  /// _interface
   ask: utterance -> question / {io.anthropic.haiku}
 
-  ~ recentQuestion: question
+  /// _state
+  recentQuestion: question
 
+  /// _handlers
   on utterance u {
     q = ask(u)
     recentQuestion = recentQuestion ~> q
@@ -88,26 +93,33 @@ role prompter {
 }
 
 role mouth {
+  /// _handlers
   on question q {}
 }
 
 actor mind @ rubberDuck {
+  /// _io
   clock: io.sim.clock
 
+  /// _roles
   episodicMemory(clock)
   voice(clock)(episodicMemory -> recall)
   hunger(clock)
 
+  /// _dispatch_scripts
   on clock.tick sequence(hunger -> voice)
 }
 
 actor rubberDuck {
+  /// _io
   llm:      io.anthropic.haiku
   siblings: io.sim.comms.peer
 
+  /// _roles
   listener()
   prompter(llm)
   mouth()
 
+  /// _dispatch_scripts
   on siblings.utterance sequence(listener -> prompter)
 }

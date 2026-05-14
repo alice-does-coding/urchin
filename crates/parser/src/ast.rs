@@ -101,10 +101,15 @@ pub struct InterfaceMethod {
     pub ty: TypeExpr,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StateField {
     pub name: String,
     pub ty: TypeExpr,
+    /// Optional initializer: `level: float = 0.0`. Used by the runtime
+    /// to seed the field when the role is instantiated. `None` means
+    /// the typechecker will require an explicit init somewhere
+    /// (potentially in a future role-level init block).
+    pub init: Option<Expr>,
 }
 
 /// `on TypePath binding? { stmt* }`

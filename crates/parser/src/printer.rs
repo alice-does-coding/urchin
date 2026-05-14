@@ -68,6 +68,8 @@ fn write_role(out: &mut String, r: &RoleDecl) {
     out.push('\n');
 
     if has_interface {
+        write_indent(out, 1);
+        out.push_str("/// _interface\n");
         for m in &r.interface {
             write_indent(out, 1);
             write!(out, "{}: ", m.name).unwrap();
@@ -80,10 +82,16 @@ fn write_role(out: &mut String, r: &RoleDecl) {
         if has_interface {
             out.push('\n');
         }
+        write_indent(out, 1);
+        out.push_str("/// _state\n");
         for f in &r.state {
             write_indent(out, 1);
-            write!(out, "~ {}: ", f.name).unwrap();
+            write!(out, "{}: ", f.name).unwrap();
             write_type(out, &f.ty);
+            if let Some(init) = &f.init {
+                out.push_str(" = ");
+                write_expr(out, init, 1);
+            }
             out.push('\n');
         }
     }
@@ -92,6 +100,8 @@ fn write_role(out: &mut String, r: &RoleDecl) {
         if has_interface || has_state {
             out.push('\n');
         }
+        write_indent(out, 1);
+        out.push_str("/// _handlers\n");
         let mut first = true;
         for h in &r.handlers {
             if !first {
@@ -138,6 +148,8 @@ fn write_actor(out: &mut String, a: &ActorDecl) {
     out.push('\n');
 
     if has_spines {
+        write_indent(out, 1);
+        out.push_str("/// _io\n");
         for s in &a.io_spines {
             write_indent(out, 1);
             write!(out, "{}: ", s.name).unwrap();
@@ -150,6 +162,8 @@ fn write_actor(out: &mut String, a: &ActorDecl) {
         if has_spines {
             out.push('\n');
         }
+        write_indent(out, 1);
+        out.push_str("/// _roles\n");
         for inst in &a.role_instances {
             write_role_instance(out, inst, 1);
             out.push('\n');
@@ -160,6 +174,8 @@ fn write_actor(out: &mut String, a: &ActorDecl) {
         if has_spines || has_instances {
             out.push('\n');
         }
+        write_indent(out, 1);
+        out.push_str("/// _dispatch_scripts\n");
         for d in &a.dispatch {
             write_indent(out, 1);
             write!(out, "on {}.{} ", d.event.spine, d.event.event).unwrap();
