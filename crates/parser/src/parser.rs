@@ -211,7 +211,14 @@ where
         let broadcast = just(Token::KwBroadcast)
             .ignore_then(type_path)
             .then(args)
-            .map(|(message_type, args)| Stmt::Broadcast { message_type, args });
+            .map_with(|(message_type, args), e| {
+                let s: Span = e.span();
+                Stmt::Broadcast {
+                    message_type,
+                    args,
+                    span: s.start..s.end,
+                }
+            });
 
         let block = stmt
             .clone()
@@ -1007,7 +1014,7 @@ mod tests {
     fn parses_broadcast_no_args() {
         let body = handler_body("role X { on Tick { broadcast Wants } }");
         match &body[0] {
-            Stmt::Broadcast { message_type, args } => {
+            Stmt::Broadcast { message_type, args, .. } => {
                 assert_eq!(message_type, &vec!["Wants".to_string()]);
                 assert!(args.is_empty());
             }
@@ -1019,7 +1026,7 @@ mod tests {
     fn parses_broadcast_with_args() {
         let body = handler_body("role X { on Tick { broadcast Found(1) } }");
         match &body[0] {
-            Stmt::Broadcast { message_type, args } => {
+            Stmt::Broadcast { message_type, args, .. } => {
                 assert_eq!(message_type, &vec!["Found".to_string()]);
                 assert_eq!(args.len(), 1);
                 assert_eq!(args[0], Expr::Int(1));

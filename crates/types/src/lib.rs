@@ -72,11 +72,11 @@ fn check_composition_completeness(
     }
 
     // Walk every broadcast in every handler body of every composed role.
-    // Any unhandled broadcast is an error.
+    // Any unhandled broadcast is an error pointing at the broadcast itself.
     for r in &composed {
         for h in &r.handlers {
             for stmt in &h.body {
-                walk_broadcasts(stmt, &mut |msg_type| {
+                walk_broadcasts(stmt, &mut |msg_type, span| {
                     if !handled.contains(msg_type) {
                         errors.push(CheckError {
                             message: format!(
@@ -85,9 +85,7 @@ fn check_composition_completeness(
                                 msg_type.join("."),
                                 r.name,
                             ),
-                            // No spans on AST nodes yet — point at the start
-                            // of file as a placeholder. Improves once spans land.
-                            span: 0..0,
+                            span: span.clone(),
                         });
                     }
                 });
@@ -96,10 +94,11 @@ fn check_composition_completeness(
     }
 }
 
-/// Walk a statement tree and call `f` for every broadcast's message type.
-fn walk_broadcasts<F: FnMut(&Vec<String>)>(stmt: &Stmt, f: &mut F) {
+/// Walk a statement tree and call `f` for every broadcast — passing both
+/// the message type and the broadcast statement's source span.
+fn walk_broadcasts<F: FnMut(&Vec<String>, &Range<usize>)>(stmt: &Stmt, f: &mut F) {
     match stmt {
-        Stmt::Broadcast { message_type, .. } => f(message_type),
+        Stmt::Broadcast { message_type, span, .. } => f(message_type, span),
         Stmt::If {
             then_body,
             else_body,
@@ -114,10 +113,9 @@ fn walk_broadcasts<F: FnMut(&Vec<String>)>(stmt: &Stmt, f: &mut F) {
                 }
             }
         }
-        // Match arms can also contain broadcasts via Stmt::ExprStmt(Match{...}),
-        // but match-arm bodies are Vec<Stmt>, recursable from the Match expr.
-        // Walking statement-shaped recursion only is enough for now; nested
-        // match-in-expression position is a follow-up.
+        // Match arms can also contain broadcasts via Stmt::ExprStmt(Match{...});
+        // walking through expression-level statement bodies lands when match
+        // arm-body recursion is added in a follow-up.
         Stmt::Assign { .. } | Stmt::Reply(_) | Stmt::ExprStmt(_) => {}
     }
 }

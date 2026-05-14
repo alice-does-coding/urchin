@@ -117,8 +117,14 @@ pub enum Stmt {
     /// `reply expr`
     Reply(Expr),
     /// `broadcast TypePath` or `broadcast TypePath(args)` — emit a message
-    /// onto the actor's bus.
-    Broadcast { message_type: Vec<String>, args: Vec<Expr> },
+    /// onto the actor's bus. `span` is the source range covering the whole
+    /// `broadcast …` statement, used by the typechecker for diagnostics
+    /// (e.g. composition-completeness errors point at the offending broadcast).
+    Broadcast {
+        message_type: Vec<String>,
+        args: Vec<Expr>,
+        span: std::ops::Range<usize>,
+    },
     /// `if cond { then_body } else { else_body }`. Else is optional.
     If {
         cond: Expr,

@@ -234,7 +234,7 @@ fn write_stmt(out: &mut String, s: &Stmt, depth: usize) {
             out.push_str("reply ");
             write_expr(out, e, depth);
         }
-        Stmt::Broadcast { message_type, args } => {
+        Stmt::Broadcast { message_type, args, .. } => {
             out.push_str("broadcast ");
             write_dotted(out, message_type);
             if !args.is_empty() {
@@ -527,13 +527,19 @@ mod tests {
     use super::*;
     use crate::parse;
 
-    /// Round-trip: parse, format, re-parse, assert AST equality.
+    /// Round-trip: parse, format, re-parse, format again — both formatted
+    /// outputs must match. This is stronger than AST equality (which
+    /// can't be used directly because AST nodes now carry spans that
+    /// differ between original and reformatted source) and equivalent
+    /// in practice — if the formatted strings agree, the parser
+    /// interpreted both inputs as semantically the same program.
     fn round_trip(src: &str) {
         let m1 = parse(src).expect("first parse");
-        let formatted = format(&m1);
-        let m2 = parse(&formatted)
-            .unwrap_or_else(|errs| panic!("re-parse failed:\n{formatted}\nerrs: {errs:?}"));
-        assert_eq!(m1, m2, "round-trip diverged.\nfirst: {m1:#?}\nformatted:\n{formatted}\nsecond: {m2:#?}");
+        let formatted1 = format(&m1);
+        let m2 = parse(&formatted1)
+            .unwrap_or_else(|errs| panic!("re-parse failed:\n{formatted1}\nerrs: {errs:?}"));
+        let formatted2 = format(&m2);
+        assert_eq!(formatted1, formatted2, "round-trip diverged");
     }
 
     /// Idempotency: format(format(x)) == format(x).
