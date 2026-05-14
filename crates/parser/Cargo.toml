@@ -3,3 +3,10 @@ name = "urchin-parser"
 edition.workspace = true
 version.workspace = true
 publish.workspace = true
+
+[dependencies]
+chumsky = "1.0.0-alpha.8"
+
+[lib]
+name = "urchin_parser"
+path = "src/lib.rs"

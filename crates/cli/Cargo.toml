@@ -7,3 +7,7 @@ publish.workspace = true
 [[bin]]
 name = "urchin"
 path = "src/main.rs"
+
+[dependencies]
+urchin-parser = { path = "../parser" }
+clap = { version = "4", features = ["derive"] }
