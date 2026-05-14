@@ -3,6 +3,8 @@
 //! Uses chumsky character-level combinators. Comments (`///` … to end of line)
 //! and whitespace are skipped; everything else becomes a token.
 
+use std::fmt;
+
 use chumsky::prelude::*;
 use chumsky::span::SimpleSpan;
 
@@ -77,6 +79,47 @@ pub enum Token {
 
 pub type Span = SimpleSpan<usize>;
 pub type Spanned<T> = (T, Span);
+
+/// Display tokens the way they appear in source — error messages like
+/// "expected `}`, found `~`" need this to read naturally.
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s: &str = match self {
+            Token::KwRole => "role",
+            Token::KwActor => "actor",
+            Token::KwOn => "on",
+            Token::KwParallel => "parallel",
+            Token::KwSequence => "sequence",
+            Token::KwAsync => "async",
+            Token::KwReply => "reply",
+            Token::KwIf => "if",
+            Token::KwElse => "else",
+            Token::KwBroadcast => "broadcast",
+            Token::Ident(name) => return write!(f, "{name}"),
+            Token::IntLit(n) => return write!(f, "{n}"),
+            Token::Tilde => "~",
+            Token::Colon => ":",
+            Token::Equals => "=",
+            Token::EqEq => "==",
+            Token::Lt => "<",
+            Token::Gt => ">",
+            Token::Plus => "+",
+            Token::Comma => ",",
+            Token::Arrow => "->",
+            Token::TildeArrow => "~>",
+            Token::Pipe => "|>",
+            Token::LBrace => "{",
+            Token::RBrace => "}",
+            Token::LParen => "(",
+            Token::RParen => ")",
+            Token::LBracket => "[",
+            Token::RBracket => "]",
+            Token::Slash => "/",
+            Token::Dot => ".",
+        };
+        f.write_str(s)
+    }
+}
 
 /// Lex `source` into a stream of `(Token, Span)` pairs.
 ///

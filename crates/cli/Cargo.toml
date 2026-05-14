@@ -11,3 +11,4 @@ path = "src/main.rs"
 [dependencies]
 urchin-parser = { path = "../parser" }
 clap = { version = "4", features = ["derive"] }
+ariadne = "0.6"

@@ -15,12 +15,13 @@ use crate::lexer::{lex, Span, Token};
 use crate::ParseError;
 
 /// Public entry point. Lex then parse `source`; flatten errors from both
-/// stages into a single `Vec<ParseError>`.
+/// stages into a single `Vec<ParseError>`. Error messages use chumsky's
+/// `Display` (not `Debug`) so they read cleanly when rendered.
 pub fn parse(source: &str) -> Result<Module, Vec<ParseError>> {
     let tokens = lex(source).map_err(|errs| {
         errs.into_iter()
             .map(|e| ParseError {
-                message: format!("lex error: {e:?}"),
+                message: e.to_string(),
                 span: e.span().into_range(),
             })
             .collect::<Vec<_>>()
@@ -32,7 +33,7 @@ pub fn parse(source: &str) -> Result<Module, Vec<ParseError>> {
     module_parser().parse(input).into_result().map_err(|errs| {
         errs.into_iter()
             .map(|e| ParseError {
-                message: format!("parse error: {e:?}"),
+                message: e.to_string(),
                 span: e.span().into_range(),
             })
             .collect()

@@ -1,11 +1,13 @@
 //! `urchin` — the language CLI.
 //!
 //! First subcommand: `urchin parse <file>` — lex + parse a `.ur` file
-//! and pretty-print the resulting AST.
+//! and pretty-print the resulting AST. Errors render through ariadne
+//! with source-pointing labels.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use ariadne::{Color, Label, Report, ReportKind, Source};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -34,7 +36,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_parse(file: &std::path::Path) -> Result<(), ExitCode> {
+fn run_parse(file: &Path) -> Result<(), ExitCode> {
     let source = std::fs::read_to_string(file).map_err(|e| {
         eprintln!("urchin: cannot read {}: {e}", file.display());
         ExitCode::from(2)
@@ -46,10 +48,26 @@ fn run_parse(file: &std::path::Path) -> Result<(), ExitCode> {
             Ok(())
         }
         Err(errors) => {
-            for err in &errors {
-                eprintln!("{}: {}", file.display(), err.message);
+            let source_id = file.display().to_string();
+            for err in errors {
+                render_error(&source_id, &source, &err);
             }
             Err(ExitCode::from(1))
         }
     }
+}
+
+/// Render one `ParseError` as an ariadne diagnostic written to stderr.
+fn render_error(source_id: &str, source: &str, err: &urchin_parser::ParseError) {
+    let span = (source_id.to_string(), err.span.clone());
+    Report::build(ReportKind::Error, span.clone())
+        .with_message(&err.message)
+        .with_label(
+            Label::new(span)
+                .with_message(&err.message)
+                .with_color(Color::Red),
+        )
+        .finish()
+        .eprint((source_id.to_string(), Source::from(source)))
+        .expect("write diagnostic to stderr");
 }
