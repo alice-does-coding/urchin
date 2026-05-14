@@ -554,50 +554,50 @@ mod tests {
 
     #[test]
     fn round_trips_role_with_state() {
-        round_trip("role Hunger { level = 0 }");
+        round_trip("role Hunger { /// _state level = 0 }");
     }
 
     #[test]
     fn round_trips_role_with_state_and_handlers() {
-        round_trip("role X { traces = 0  on Cue c { reply traces } }");
+        round_trip("role X { /// _state traces = 0  /// _handlers on Cue c { reply traces } }");
     }
 
     #[test]
     fn round_trips_arithmetic_with_precedence() {
-        round_trip("role X { on T { x = 1 + 2 * 3 } }");
+        round_trip("role X { /// _handlers on T { x = 1 + 2 * 3 } }");
     }
 
     #[test]
     fn round_trips_state_shift_chain() {
-        round_trip("role X { x = 0  on T { x = x ~> x + 1 } }");
+        round_trip("role X { /// _state x = 0  /// _handlers on T { x = x ~> x + 1 } }");
     }
 
     #[test]
     fn round_trips_pipe_chain() {
-        round_trip("role X { on T { x = a |> b() |> c(d) } }");
+        round_trip("role X { /// _handlers on T { x = a |> b() |> c(d) } }");
     }
 
     #[test]
     fn round_trips_named_args_and_field_access() {
-        round_trip("role X { on T { x = filter(by: c.weight) } }");
+        round_trip("role X { /// _handlers on T { x = filter(by: c.weight) } }");
     }
 
     #[test]
     fn round_trips_lists() {
-        round_trip("role X { xs = []  on T { x = [1, 2, 3] } }");
+        round_trip("role X { /// _state xs = []  /// _handlers on T { x = [1, 2, 3] } }");
     }
 
     #[test]
     fn round_trips_function_type_with_effects_in_state() {
         round_trip(
-            "role X { handler: Cue -> [Trace] / {io.sim.comms} = noop }",
+            "role X { /// _state handler: Cue -> [Trace] / {io.sim.comms} = noop }",
         );
     }
 
     #[test]
     fn round_trips_match() {
         round_trip(
-            "role X { on S s { match s { Threat -> broadcast Retreat _ -> {} } } }",
+            "role X { /// _handlers on S s { match s { Threat -> broadcast Retreat _ -> {} } } }",
         );
     }
 
@@ -605,10 +605,13 @@ mod tests {
     fn round_trips_actor() {
         round_trip(
             "actor mind {
+               /// _io
                clock: io.sim.clock
                siblings: io.sim.comms.peer
+               /// _roles
                episodicMemory(clock, siblings)
                voice(clock)
+               /// _dispatch_scripts
                on clock.tick sequence(episodicMemory -> voice)
              }",
         );
@@ -618,7 +621,9 @@ mod tests {
     fn round_trips_actor_with_parent() {
         round_trip(
             "actor mind @ rubberDuck {
+               /// _io
                clock: io.sim.clock
+               /// _roles
                hunger(clock)
              }",
         );
@@ -641,8 +646,8 @@ mod tests {
     #[test]
     fn round_trips_module_with_roles_and_actor() {
         round_trip(
-            "role Hunger { level = 0 }
-             actor mind { clock: io.sim.clock  hunger(clock) }",
+            "role Hunger { /// _state level = 0 }
+             actor mind { /// _io clock: io.sim.clock  /// _roles hunger(clock) }",
         );
     }
 
@@ -668,7 +673,7 @@ mod tests {
 
     #[test]
     fn formats_arithmetic_without_unnecessary_parens() {
-        let m = parse("role X { on T { x = 1 + 2 } }").unwrap();
+        let m = parse("role X { /// _handlers on T { x = 1 + 2 } }").unwrap();
         let f = format(&m);
         assert!(!f.contains("(1"), "no parens around `1` expected; got:\n{f}");
         assert!(f.contains("x = 1 + 2"));
@@ -676,7 +681,7 @@ mod tests {
 
     #[test]
     fn single_pipe_stays_inline() {
-        let m = parse("role X { on T { x = a |> b() } }").unwrap();
+        let m = parse("role X { /// _handlers on T { x = a |> b() } }").unwrap();
         let f = format(&m);
         assert!(f.contains("x = a |> b()"), "expected inline pipe; got:\n{f}");
         assert!(!f.contains("\n      |>"), "single pipe should not wrap; got:\n{f}");
@@ -684,7 +689,7 @@ mod tests {
 
     #[test]
     fn three_stage_pipe_wraps_across_lines() {
-        let m = parse("role X { on T { x = a |> b() |> c() } }").unwrap();
+        let m = parse("role X { /// _handlers on T { x = a |> b() |> c() } }").unwrap();
         let f = format(&m);
         // After "x = a", a newline + indent + "|>" should appear.
         assert!(
@@ -695,11 +700,11 @@ mod tests {
 
     #[test]
     fn long_pipe_chain_in_assignment_round_trips() {
-        round_trip("role X { on T { matches = a |> b() |> c() |> d() |> e() } }");
+        round_trip("role X { /// _handlers on T { matches = a |> b() |> c() |> d() |> e() } }");
     }
 
     #[test]
     fn pipe_wrap_is_idempotent() {
-        idempotent("role X { on T { x = a |> b() |> c() |> d() } }");
+        idempotent("role X { /// _handlers on T { x = a |> b() |> c() |> d() } }");
     }
 }

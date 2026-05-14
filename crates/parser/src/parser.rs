@@ -86,12 +86,16 @@ where
 {
     let name = select! { Token::Ident(n) => n };
 
+    // Markers are REQUIRED when the section has content. Absent markers
+    // = absent section. No `~` tolerance, no implicit-by-shape fallback.
     let state_section = section_marker("state")
+        .ignore_then(state_field_parser().repeated().collect::<Vec<_>>())
         .or_not()
-        .ignore_then(state_field_parser().repeated().collect::<Vec<_>>());
+        .map(Option::unwrap_or_default);
     let handlers_section = section_marker("handlers")
+        .ignore_then(handler_parser().repeated().collect::<Vec<_>>())
         .or_not()
-        .ignore_then(handler_parser().repeated().collect::<Vec<_>>());
+        .map(Option::unwrap_or_default);
 
     let body = state_section
         .then(handlers_section)
@@ -107,12 +111,11 @@ where
         })
 }
 
-/// `StateField` ::= `~`? Ident ( `:` TypeExpr )? `=` InitExpr
+/// `StateField` ::= Ident ( `:` TypeExpr )? `=` InitExpr
 ///
 /// Init is REQUIRED. Type annotation is OPTIONAL — the type is inferred
-/// from the init value. Canonical form: `level = 0.0`. Legacy form
-/// `level: float = 0.0` still parses for migration. Leading `~` is also
-/// tolerated for legacy code without `/// _state` markers.
+/// from the init value. Canonical form: `level = 0.0`. The `~` prefix
+/// is gone — section position (`/// _state`) carries the state-ness.
 ///
 /// `InitExpr` is a deliberately small subset of `Expr` (literals, idents,
 /// list literals) — state initializers are declarative defaults at
@@ -128,10 +131,7 @@ where
         .or_not();
     let init = just(Token::Equals).ignore_then(state_init_parser());
 
-    just(Token::Tilde)
-        .or_not()
-        .ignore_then(name)
-        .then(ty_annotation)
+    name.then(ty_annotation)
         .then(init)
         .map(|((name, ty), init)| StateField { name, ty, init })
 }
@@ -535,19 +535,20 @@ where
     //   /// _io                 io_spines*
     //   /// _roles              role_instances*
     //   /// _dispatch_scripts   dispatch_decls*
-    // Tolerant: section markers optional. Each section's items have a
-    // distinguishing leading shape (io_spine has `:`, role_instance has
-    // `(`, dispatch starts with `on`), so the parser can fall through
-    // marker-free input to the items directly.
+    // Markers REQUIRED when section has content. Absent markers = absent
+    // section. No implicit-by-shape fallback.
     let io_section = section_marker("io")
+        .ignore_then(io_spine.repeated().collect::<Vec<_>>())
         .or_not()
-        .ignore_then(io_spine.repeated().collect::<Vec<_>>());
+        .map(Option::unwrap_or_default);
     let roles_section = section_marker("roles")
+        .ignore_then(role_instance.repeated().collect::<Vec<_>>())
         .or_not()
-        .ignore_then(role_instance.repeated().collect::<Vec<_>>());
+        .map(Option::unwrap_or_default);
     let dispatch_section = section_marker("dispatch_scripts")
+        .ignore_then(dispatch.repeated().collect::<Vec<_>>())
         .or_not()
-        .ignore_then(dispatch.repeated().collect::<Vec<_>>());
+        .map(Option::unwrap_or_default);
 
     let body = io_section
         .then(roles_section)
@@ -653,7 +654,7 @@ mod tests {
 
     #[test]
     fn parses_role_with_one_state_field() {
-        let r = first_role("role Hunger { level = 0 }");
+        let r = first_role("role Hunger { /// _state level = 0 }");
         assert_eq!(r.state.len(), 1);
         assert_eq!(r.state[0].name, "level");
         assert_eq!(r.state[0].init, Expr::Int(0));
@@ -661,13 +662,13 @@ mod tests {
 
     #[test]
     fn parses_role_with_multiple_state_fields() {
-        let r = first_role("role X { traces = 0  count = 0 }");
+        let r = first_role("role X { /// _state traces = 0  count = 0 }");
         assert_eq!(r.state.len(), 2);
     }
 
     #[test]
     fn parses_state_field_with_optional_type_annotation() {
-        let r = first_role("role X { mem: Memory.Associative = empty }");
+        let r = first_role("role X { /// _state mem: Memory.Associative = empty }");
         assert_eq!(
             r.state[0].ty,
             Some(TypeExpr::Path(vec!["Memory".into(), "Associative".into()]))
@@ -676,7 +677,7 @@ mod tests {
 
     #[test]
     fn parses_state_field_without_type_annotation() {
-        let r = first_role("role X { level = 0.0 }");
+        let r = first_role("role X { /// _state level = 0.0 }");
         assert!(r.state[0].ty.is_none());
         assert_eq!(r.state[0].init, Expr::Float(0.0));
     }
@@ -705,7 +706,7 @@ mod tests {
 
     #[test]
     fn parses_function_type_in_state_field() {
-        let r = first_role("role X { f: Cue -> Trace = noop }");
+        let r = first_role("role X { /// _state f: Cue -> Trace = noop }");
         assert!(matches!(
             r.state[0].ty,
             Some(TypeExpr::Function { .. })
@@ -714,26 +715,26 @@ mod tests {
 
     #[test]
     fn parses_handler_with_type_only() {
-        let r = first_role("role X { on Tick {} }");
+        let r = first_role("role X { /// _handlers on Tick {} }");
         assert_eq!(r.handlers.len(), 1);
         assert_eq!(r.handlers[0].binding, None);
     }
 
     #[test]
     fn parses_handler_with_binding() {
-        let r = first_role("role X { on Cue c {} }");
+        let r = first_role("role X { /// _handlers on Cue c {} }");
         assert_eq!(r.handlers[0].binding, Some("c".to_string()));
     }
 
     #[test]
     fn parses_handler_with_dotted_message_type() {
-        let r = first_role("role X { on io.sim.Tick {} }");
+        let r = first_role("role X { /// _handlers on io.sim.Tick {} }");
         assert_eq!(r.handlers[0].message_type.len(), 3);
     }
 
     #[test]
     fn parses_role_with_state_and_handlers() {
-        let src = "role X { level = 0  on Tick {} }";
+        let src = "role X { /// _state level = 0  /// _handlers on Tick {} }";
         let r = first_role(src);
         assert_eq!(r.state.len(), 1);
         assert_eq!(r.handlers.len(), 1);
@@ -741,7 +742,7 @@ mod tests {
 
     #[test]
     fn parses_multiple_handlers() {
-        let src = "role X { on Tick {} on Cue c {} }";
+        let src = "role X { /// _handlers on Tick {} on Cue c {} }";
         let r = first_role(src);
         assert_eq!(r.handlers.len(), 2);
     }
@@ -749,7 +750,7 @@ mod tests {
     // --- Expression grammar ---
 
     fn parse_expr_in_handler(src: &str) -> Expr {
-        let body = handler_body(&format!("role X {{ on Tick {{ {src} }} }}"));
+        let body = handler_body(&format!("role X {{ /// _handlers on Tick {{ {src} }} }}"));
         match body.into_iter().next().expect("statement") {
             Stmt::ExprStmt(e) => e,
             other => panic!("expected ExprStmt, got {other:?}"),
@@ -911,7 +912,7 @@ mod tests {
 
     #[test]
     fn parses_state_shift() {
-        let body = handler_body("role X { on Tick { level = level ~> level + 1 } }");
+        let body = handler_body("role X { /// _handlers on Tick { level = level ~> level + 1 } }");
         let stmt = body.into_iter().next().unwrap();
         match stmt {
             Stmt::Assign { name, value } => {
@@ -928,14 +929,14 @@ mod tests {
 
     #[test]
     fn parses_reply_statement() {
-        let body = handler_body("role X { on Cue c { reply level } }");
+        let body = handler_body("role X { /// _handlers on Cue c { reply level } }");
         assert_eq!(body.len(), 1);
         assert!(matches!(body[0], Stmt::Reply(_)));
     }
 
     #[test]
     fn parses_assign_statement() {
-        let body = handler_body("role X { on Tick { x = 1 } }");
+        let body = handler_body("role X { /// _handlers on Tick { x = 1 } }");
         match &body[0] {
             Stmt::Assign { name, value } => {
                 assert_eq!(name, "x");
@@ -948,7 +949,7 @@ mod tests {
     #[test]
     fn parses_multi_statement_handler_body() {
         let body = handler_body(
-            "role X { on Tick { x = 1 y = 2 reply x } }",
+            "role X { /// _handlers on Tick { x = 1 y = 2 reply x } }",
         );
         assert_eq!(body.len(), 3);
         assert!(matches!(body[0], Stmt::Assign { .. }));
@@ -1009,7 +1010,7 @@ mod tests {
 
     #[test]
     fn parses_if_without_else() {
-        let body = handler_body("role X { on Tick { if level > 7 { reply level } } }");
+        let body = handler_body("role X { /// _handlers on Tick { if level > 7 { reply level } } }");
         match &body[0] {
             Stmt::If { else_body, then_body, .. } => {
                 assert!(else_body.is_none());
@@ -1022,7 +1023,7 @@ mod tests {
     #[test]
     fn parses_if_else() {
         let body = handler_body(
-            "role X { on Tick { if level > 7 { reply 1 } else { reply 0 } } }",
+            "role X { /// _handlers on Tick { if level > 7 { reply 1 } else { reply 0 } } }",
         );
         match &body[0] {
             Stmt::If { else_body: Some(eb), .. } => {
@@ -1035,7 +1036,7 @@ mod tests {
     #[test]
     fn parses_nested_if() {
         let body = handler_body(
-            "role X { on Tick { if level > 7 { if level > 10 { reply 1 } } } }",
+            "role X { /// _handlers on Tick { if level > 7 { if level > 10 { reply 1 } } } }",
         );
         if let Stmt::If { then_body, .. } = &body[0] {
             assert!(matches!(then_body[0], Stmt::If { .. }));
@@ -1048,7 +1049,7 @@ mod tests {
 
     #[test]
     fn parses_broadcast_no_args() {
-        let body = handler_body("role X { on Tick { broadcast Wants } }");
+        let body = handler_body("role X { /// _handlers on Tick { broadcast Wants } }");
         match &body[0] {
             Stmt::Broadcast { message_type, args, .. } => {
                 assert_eq!(message_type, &vec!["Wants".to_string()]);
@@ -1060,7 +1061,7 @@ mod tests {
 
     #[test]
     fn parses_broadcast_with_args() {
-        let body = handler_body("role X { on Tick { broadcast Found(1) } }");
+        let body = handler_body("role X { /// _handlers on Tick { broadcast Found(1) } }");
         match &body[0] {
             Stmt::Broadcast { message_type, args, .. } => {
                 assert_eq!(message_type, &vec!["Found".to_string()]);
@@ -1073,7 +1074,7 @@ mod tests {
 
     #[test]
     fn parses_broadcast_with_dotted_message_type() {
-        let body = handler_body("role X { on Tick { broadcast io.sim.Wakeup } }");
+        let body = handler_body("role X { /// _handlers on Tick { broadcast io.sim.Wakeup } }");
         match &body[0] {
             Stmt::Broadcast { message_type, .. } => {
                 assert_eq!(message_type, &vec!["io".to_string(), "sim".to_string(), "Wakeup".to_string()]);
@@ -1088,7 +1089,7 @@ mod tests {
 
     #[test]
     fn parses_list_type_in_state() {
-        let r = first_role("role X { episodes: [Episode] = empty }");
+        let r = first_role("role X { /// _state episodes: [Episode] = empty }");
         assert_eq!(
             r.state[0].ty,
             Some(TypeExpr::List(Box::new(TypeExpr::Path(vec!["Episode".into()]))))
@@ -1097,7 +1098,7 @@ mod tests {
 
     #[test]
     fn parses_function_type_returning_list_in_state() {
-        let r = first_role("role X { f: Cue -> [Trace] = noop }");
+        let r = first_role("role X { /// _state f: Cue -> [Trace] = noop }");
         if let Some(TypeExpr::Function { to, .. }) = &r.state[0].ty {
             assert!(matches!(**to, TypeExpr::List(_)));
         } else {
@@ -1110,7 +1111,7 @@ mod tests {
     #[test]
     fn parses_match_with_two_arms() {
         let body = handler_body(
-            "role X { on Stimulus s { match s { Threat -> retreat() Food -> approach() } } }",
+            "role X { /// _handlers on Stimulus s { match s { Threat -> retreat() Food -> approach() } } }",
         );
         match &body[0] {
             Stmt::ExprStmt(Expr::Match { scrutinee, arms }) => {
@@ -1128,7 +1129,7 @@ mod tests {
     #[test]
     fn parses_wildcard_pattern() {
         let body = handler_body(
-            "role X { on S s { match s { Threat -> retreat() _ -> idle() } } }",
+            "role X { /// _handlers on S s { match s { Threat -> retreat() _ -> idle() } } }",
         );
         if let Stmt::ExprStmt(Expr::Match { arms, .. }) = &body[0] {
             assert_eq!(arms[1].pattern, Pattern::Wildcard);
@@ -1140,7 +1141,7 @@ mod tests {
     #[test]
     fn parses_dotted_constructor_pattern() {
         let body = handler_body(
-            "role X { on E e { match e { io.sim.Tick -> tick() } } }",
+            "role X { /// _handlers on E e { match e { io.sim.Tick -> tick() } } }",
         );
         if let Stmt::ExprStmt(Expr::Match { arms, .. }) = &body[0] {
             match &arms[0].pattern {
@@ -1155,7 +1156,7 @@ mod tests {
     #[test]
     fn parses_block_bodied_arm() {
         let body = handler_body(
-            "role X { on S s { match s { Threat -> { broadcast Retreat reply 1 } _ -> 0 } } }",
+            "role X { /// _handlers on S s { match s { Threat -> { broadcast Retreat reply 1 } _ -> 0 } } }",
         );
         if let Stmt::ExprStmt(Expr::Match { arms, .. }) = &body[0] {
             assert_eq!(arms[0].body.len(), 2);
@@ -1172,7 +1173,7 @@ mod tests {
     #[test]
     fn match_can_be_assigned_to_a_local() {
         let body = handler_body(
-            "role X { on S s { decision = match s { Yes -> 1 No -> 0 } } }",
+            "role X { /// _handlers on S s { decision = match s { Yes -> 1 No -> 0 } } }",
         );
         match &body[0] {
             Stmt::Assign { name, value: Expr::Match { .. } } => {
@@ -1243,7 +1244,7 @@ mod tests {
 
     #[test]
     fn function_without_effect_clause_has_empty_effects() {
-        let r = first_role("role X { f: Cue -> Trace = noop }");
+        let r = first_role("role X { /// _state f: Cue -> Trace = noop }");
         if let Some(TypeExpr::Function { effects, .. }) = &r.state[0].ty {
             assert!(effects.is_empty());
         } else {
@@ -1253,7 +1254,7 @@ mod tests {
 
     #[test]
     fn parses_single_effect_annotation() {
-        let r = first_role("role X { fetch: Url -> Response / {io.http} = noop }");
+        let r = first_role("role X { /// _state fetch: Url -> Response / {io.http} = noop }");
         if let Some(TypeExpr::Function { effects, .. }) = &r.state[0].ty {
             assert_eq!(effects, &vec![vec!["io".to_string(), "http".to_string()]]);
         } else {
@@ -1264,7 +1265,7 @@ mod tests {
     #[test]
     fn parses_multiple_effects() {
         let r = first_role(
-            "role X { tick: Unit -> Unit / {io.sim.clock, io.sim.comms} = noop }",
+            "role X { /// _state tick: Unit -> Unit / {io.sim.clock, io.sim.comms} = noop }",
         );
         if let Some(TypeExpr::Function { effects, .. }) = &r.state[0].ty {
             assert_eq!(effects.len(), 2);
@@ -1275,7 +1276,7 @@ mod tests {
 
     #[test]
     fn parses_empty_effect_set_explicitly() {
-        let r = first_role("role X { f: A -> B / {} = noop }");
+        let r = first_role("role X { /// _state f: A -> B / {} = noop }");
         if let Some(TypeExpr::Function { effects, .. }) = &r.state[0].ty {
             assert!(effects.is_empty());
         } else {
@@ -1285,7 +1286,7 @@ mod tests {
 
     #[test]
     fn parses_nested_list_type() {
-        let r = first_role("role X { matrix: [[int]] = empty }");
+        let r = first_role("role X { /// _state matrix: [[int]] = empty }");
         assert_eq!(
             r.state[0].ty,
             Some(TypeExpr::List(Box::new(TypeExpr::List(Box::new(
@@ -1350,8 +1351,11 @@ mod tests {
     fn parses_actor_with_parent_and_body() {
         let a = first_actor(
             "actor mind @ rubberDuck {
+               /// _io
                clock: io.sim.clock
+               /// _roles
                hunger(clock)
+               /// _dispatch_scripts
                on clock.tick parallel
              }",
         );
@@ -1365,6 +1369,7 @@ mod tests {
     fn parses_actor_with_io_spines() {
         let a = first_actor(
             "actor mind {
+               /// _io
                http: io.http.server
                clock: io.sim.clock
              }",
@@ -1381,7 +1386,9 @@ mod tests {
     fn parses_role_instance_with_io_args() {
         let a = first_actor(
             "actor mind {
+               /// _io
                clock: io.sim.clock
+               /// _roles
                hunger(clock)
              }",
         );
@@ -1395,8 +1402,10 @@ mod tests {
     fn parses_role_instance_with_multiple_io_args() {
         let a = first_actor(
             "actor mind {
+               /// _io
                clock: io.sim.clock
                siblings: io.sim.comms.peer
+               /// _roles
                episodicMemory(clock, siblings)
              }",
         );
@@ -1408,7 +1417,9 @@ mod tests {
     fn parses_dispatch_parallel() {
         let a = first_actor(
             "actor mind {
+               /// _io
                clock: io.sim.clock
+               /// _dispatch_scripts
                on clock.tick parallel
              }",
         );
@@ -1422,7 +1433,9 @@ mod tests {
     fn parses_dispatch_async() {
         let a = first_actor(
             "actor mind {
+               /// _io
                siblings: io.sim.comms.peer
+               /// _dispatch_scripts
                on siblings.message async
              }",
         );
@@ -1433,9 +1446,12 @@ mod tests {
     fn parses_dispatch_sequence_with_lowercase_instances() {
         let a = first_actor(
             "actor mind {
+               /// _io
                clock: io.sim.clock
+               /// _roles
                hunger(clock)
                voice(clock)
+               /// _dispatch_scripts
                on clock.tick sequence(hunger -> voice)
              }",
         );
@@ -1451,13 +1467,16 @@ mod tests {
     fn parses_actor_with_all_three_sections() {
         let a = first_actor(
             "actor mind {
+               /// _io
                clock:    io.sim.clock
                siblings: io.sim.comms.peer
 
+               /// _roles
                episodicMemory(clock, siblings)
                voice(clock)
                hunger(clock)
 
+               /// _dispatch_scripts
                on clock.tick sequence(hunger -> voice)
              }",
         );
@@ -1468,10 +1487,13 @@ mod tests {
 
     #[test]
     fn role_instance_after_dispatch_is_a_parse_error() {
-        // Section order: spines, then instances, then dispatch — strict.
+        // Section order: io, then roles, then dispatch — strict.
         let src = "actor mind {
+                     /// _io
                      clock: io.sim.clock
+                     /// _dispatch_scripts
                      on clock.tick parallel
+                     /// _roles
                      hunger(clock)
                    }";
         assert!(parse(src).is_err());
@@ -1480,7 +1502,9 @@ mod tests {
     #[test]
     fn io_spine_after_role_instance_is_a_parse_error() {
         let src = "actor mind {
+                     /// _roles
                      hunger(clock)
+                     /// _io
                      clock: io.sim.clock
                    }";
         assert!(parse(src).is_err());
@@ -1489,8 +1513,8 @@ mod tests {
     #[test]
     fn module_can_hold_roles_and_actors_together() {
         let m = parse(
-            "role Hunger { level = 0 }
-             actor mind { clock: io.sim.clock  hunger(clock) }",
+            "role Hunger { /// _state level = 0 }
+             actor mind { /// _io clock: io.sim.clock  /// _roles hunger(clock) }",
         )
         .expect("parse");
         assert_eq!(m.roles.len(), 1);
@@ -1501,8 +1525,10 @@ mod tests {
     fn parses_canonical_hunger_handler() {
         let body = handler_body(
             "role Hunger {
+               /// _state
                level = 0
 
+               /// _handlers
                on Tick {
                  level = level ~> level + 1
                  if level > 7 {

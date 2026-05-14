@@ -242,12 +242,17 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
     // anything else to end of line = comment.
     let inline_ws = one_of(" \t").repeated();
     let triple_slash = just("///").ignore_then(choice((
+        // Section marker: `_<ident>`. After the marker name, only inline
+        // whitespace is consumed; the marker does NOT eat the rest of
+        // the line. This means `/// _handlers on tick {}` lexes as
+        // `SectionMarker("handlers")` followed by `KwOn`, etc.
         inline_ws
             .clone()
             .ignore_then(just('_'))
             .ignore_then(text::ident())
-            .then_ignore(any().and_is(just('\n').not()).repeated())
+            .then_ignore(inline_ws.clone())
             .map(|name: &str| Token::SectionMarker(name.to_string())),
+        // Regular `///` comment: consumes to end of line, filtered in `lex()`.
         any()
             .and_is(just('\n').not())
             .repeated()
@@ -512,10 +517,18 @@ mod tests {
     }
 
     #[test]
-    fn section_marker_ignores_trailing_text_on_line() {
+    fn section_marker_followed_by_code_lexes_cleanly() {
+        // After the marker, the next tokens come from the source directly —
+        // markers consume the marker name + trailing inline whitespace, NOT
+        // the rest of the line. Lets single-line `role X { /// _handlers on
+        // Tick {} }` work.
         assert_eq!(
-            toks("/// _io  (the actor's substrate)"),
-            vec![Token::SectionMarker("io".into())]
+            toks("/// _handlers on tick"),
+            vec![
+                Token::SectionMarker("handlers".into()),
+                Token::KwOn,
+                Token::Ident("tick".into()),
+            ]
         );
     }
 

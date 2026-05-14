@@ -20,34 +20,26 @@
 role photographer {
   /// _state
   shotsTaken = 0
-  lastSubject = ""
 
   /// _handlers
-  on subject s {
+  on tick {
     shotsTaken = shotsTaken ~> shotsTaken + 1
-    lastSubject = lastSubject ~> s
   }
 }
 
 role musician {
   /// _state
   notesPlayed = 0
-  recentMood = "calm"
 
   /// _handlers
   on tick {
     notesPlayed = notesPlayed ~> notesPlayed + 1
-  }
-
-  on mood m {
-    recentMood = recentMood ~> m
   }
 }
 
 role director {
   /// _state
   scenesDirected = 0
-  currentScene = ""
 
   /// _handlers
   on tick {

@@ -200,15 +200,19 @@ mod tests {
     fn passes_when_broadcast_is_handled_in_same_actor() {
         let src = "
             role hunger {
+              /// _handlers
               on tick {
                 broadcast wants
               }
             }
             role voice {
+              /// _handlers
               on wants {}
             }
             actor mind {
+              /// _io
               clock: io.sim.clock
+              /// _roles
               hunger(clock)
               voice(clock)
             }
@@ -221,12 +225,15 @@ mod tests {
     fn fails_when_broadcast_has_no_handler() {
         let src = "
             role hunger {
+              /// _handlers
               on tick {
                 broadcast wants
               }
             }
             actor mind {
+              /// _io
               clock: io.sim.clock
+              /// _roles
               hunger(clock)
             }
         ";
@@ -242,13 +249,17 @@ mod tests {
     fn fails_for_broadcast_inside_if() {
         let src = "
             role hunger {
+              /// _state
               level = 0
+              /// _handlers
               on tick {
                 if level > 0 { broadcast wants }
               }
             }
             actor mind {
+              /// _io
               clock: io.sim.clock
+              /// _roles
               hunger(clock)
             }
         ";
@@ -263,13 +274,17 @@ mod tests {
         // into the actor — should NOT satisfy the requirement.
         let src = "
             role hunger {
+              /// _handlers
               on tick { broadcast wants }
             }
             role unrelated {
+              /// _handlers
               on wants {}
             }
             actor mind {
+              /// _io
               clock: io.sim.clock
+              /// _roles
               hunger(clock)
             }
         ";
@@ -285,7 +300,7 @@ mod tests {
 
     #[test]
     fn module_with_only_roles_passes() {
-        let src = "role hunger { on tick { broadcast wants } }";
+        let src = "role hunger { /// _handlers on tick { broadcast wants } }";
         let m = parse(src).expect("parse");
         // No actor → no composition to check.
         check(&m).expect("no actors, no problem");
@@ -295,6 +310,7 @@ mod tests {
     fn multiple_unhandled_broadcasts_each_error() {
         let src = "
             role chatter {
+              /// _handlers
               on tick {
                 broadcast hum
                 broadcast whisper
@@ -302,7 +318,9 @@ mod tests {
               }
             }
             actor mind {
+              /// _io
               clock: io.sim.clock
+              /// _roles
               chatter(clock)
             }
         ";
@@ -316,12 +334,15 @@ mod tests {
     #[test]
     fn dispatch_passes_when_two_handlers_have_explicit_dispatch() {
         let src = "
-            role hunger { on tick {} }
-            role voice  { on tick {} }
+            role hunger { /// _handlers on tick {} }
+            role voice  { /// _handlers on tick {} }
             actor mind {
+              /// _io
               clock: io.sim.clock
+              /// _roles
               hunger(clock)
               voice(clock)
+              /// _dispatch_scripts
               on clock.tick sequence(hunger -> voice)
             }
         ";
@@ -332,10 +353,12 @@ mod tests {
     #[test]
     fn dispatch_fails_when_two_handlers_lack_dispatch() {
         let src = "
-            role hunger { on tick {} }
-            role voice  { on tick {} }
+            role hunger { /// _handlers on tick {} }
+            role voice  { /// _handlers on tick {} }
             actor mind {
+              /// _io
               clock: io.sim.clock
+              /// _roles
               hunger(clock)
               voice(clock)
             }
@@ -352,9 +375,11 @@ mod tests {
     #[test]
     fn dispatch_passes_when_only_one_handler() {
         let src = "
-            role hunger { on tick {} }
+            role hunger { /// _handlers on tick {} }
             actor mind {
+              /// _io
               clock: io.sim.clock
+              /// _roles
               hunger(clock)
             }
         ";
@@ -365,14 +390,17 @@ mod tests {
     #[test]
     fn dispatch_passes_with_three_handlers_and_sequence_chain() {
         let src = "
-            role a { on tick {} }
-            role b { on tick {} }
-            role c { on tick {} }
+            role a { /// _handlers on tick {} }
+            role b { /// _handlers on tick {} }
+            role c { /// _handlers on tick {} }
             actor mind {
+              /// _io
               clock: io.sim.clock
+              /// _roles
               a(clock)
               b(clock)
               c(clock)
+              /// _dispatch_scripts
               on clock.tick sequence(a -> b -> c)
             }
         ";
@@ -383,12 +411,15 @@ mod tests {
     #[test]
     fn dispatch_passes_with_parallel_mode() {
         let src = "
-            role a { on tick {} }
-            role b { on tick {} }
+            role a { /// _handlers on tick {} }
+            role b { /// _handlers on tick {} }
             actor mind {
+              /// _io
               clock: io.sim.clock
+              /// _roles
               a(clock)
               b(clock)
+              /// _dispatch_scripts
               on clock.tick parallel
             }
         ";
@@ -399,12 +430,15 @@ mod tests {
     #[test]
     fn dispatch_passes_with_async_mode() {
         let src = "
-            role a { on tick {} }
-            role b { on tick {} }
+            role a { /// _handlers on tick {} }
+            role b { /// _handlers on tick {} }
             actor mind {
+              /// _io
               clock: io.sim.clock
+              /// _roles
               a(clock)
               b(clock)
+              /// _dispatch_scripts
               on clock.tick async
             }
         ";
