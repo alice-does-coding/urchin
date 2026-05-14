@@ -420,9 +420,10 @@ where
         })
 }
 
-/// `TypeExpr` ::= TypeAtom (`->` TypeExpr)?    -- right-associative function type
-/// `TypeAtom` ::= `[` TypeExpr `]`              -- list type
+/// `TypeExpr` ::= TypeAtom (`->` TypeExpr EffectSet?)?     // right-assoc
+/// `TypeAtom` ::= `[` TypeExpr `]`
 ///              | Ident (`.` Ident)*
+/// `EffectSet` ::= `/` `{` (effect_path (`,` effect_path)*)? `}`
 fn type_expr_parser<'src, I>(
 ) -> impl Parser<'src, I, TypeExpr, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -430,11 +431,13 @@ where
 {
     recursive(|type_expr| {
         let segment = select! { Token::Ident(n) => n };
-        let path = segment
+        let dotted = segment
+            .clone()
             .separated_by(just(Token::Dot))
             .at_least(1)
-            .collect::<Vec<_>>()
-            .map(TypeExpr::Path);
+            .collect::<Vec<_>>();
+
+        let path = dotted.clone().map(TypeExpr::Path);
 
         let list = type_expr
             .clone()
@@ -443,9 +446,30 @@ where
 
         let atom = choice((list, path));
 
+        // Optional effect set following an arrow's RHS.
+        let effect_set = just(Token::Slash)
+            .ignore_then(
+                dotted
+                    .clone()
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .or_not()
+            .map(Option::unwrap_or_default);
+
         atom.foldl(
-            just(Token::Arrow).ignore_then(type_expr).repeated().at_most(1),
-            |lhs, rhs| TypeExpr::Function(Box::new(lhs), Box::new(rhs)),
+            just(Token::Arrow)
+                .ignore_then(type_expr)
+                .then(effect_set)
+                .repeated()
+                .at_most(1),
+            |lhs, (rhs, effects)| TypeExpr::Function {
+                from: Box::new(lhs),
+                to: Box::new(rhs),
+                effects,
+            },
         )
     })
 }
@@ -526,7 +550,7 @@ mod tests {
     #[test]
     fn parses_function_type_in_state_field() {
         let r = first_role("role X { ~ f: Cue -> Trace }");
-        assert!(matches!(r.state[0].ty, TypeExpr::Function(..)));
+        assert!(matches!(r.state[0].ty, TypeExpr::Function { .. }));
     }
 
     #[test]
@@ -936,10 +960,65 @@ mod tests {
     #[test]
     fn parses_function_returning_list() {
         let r = first_role("role X { recall: Cue -> [Trace] }");
-        if let TypeExpr::Function(_, ret) = &r.interface[0].ty {
-            assert!(matches!(**ret, TypeExpr::List(_)));
+        if let TypeExpr::Function { to, .. } = &r.interface[0].ty {
+            assert!(matches!(**to, TypeExpr::List(_)));
         } else {
             panic!("expected Function type");
+        }
+    }
+
+    // --- Effect annotations ---
+
+    #[test]
+    fn function_without_effect_clause_has_empty_effects() {
+        let r = first_role("role X { recall: Cue -> Trace }");
+        if let TypeExpr::Function { effects, .. } = &r.interface[0].ty {
+            assert!(effects.is_empty());
+        } else {
+            panic!("expected Function");
+        }
+    }
+
+    #[test]
+    fn parses_single_effect_annotation() {
+        let r = first_role("role X { fetch: Url -> Response / {io.http} }");
+        if let TypeExpr::Function { effects, .. } = &r.interface[0].ty {
+            assert_eq!(effects, &vec![vec!["io".to_string(), "http".to_string()]]);
+        } else {
+            panic!("expected Function");
+        }
+    }
+
+    #[test]
+    fn parses_multiple_effects() {
+        let r = first_role("role X { tick: Unit -> Unit / {io.sim.clock, io.sim.comms} }");
+        if let TypeExpr::Function { effects, .. } = &r.interface[0].ty {
+            assert_eq!(effects.len(), 2);
+            assert_eq!(effects[0], vec!["io".to_string(), "sim".to_string(), "clock".to_string()]);
+            assert_eq!(effects[1], vec!["io".to_string(), "sim".to_string(), "comms".to_string()]);
+        } else {
+            panic!("expected Function");
+        }
+    }
+
+    #[test]
+    fn parses_empty_effect_set_explicitly() {
+        // `T -> U / {}` is allowed; parses as empty effects (same as omitting `/ {}`).
+        let r = first_role("role X { f: A -> B / {} }");
+        if let TypeExpr::Function { effects, .. } = &r.interface[0].ty {
+            assert!(effects.is_empty());
+        } else {
+            panic!("expected Function");
+        }
+    }
+
+    #[test]
+    fn effect_annotation_works_on_state_field_function_type() {
+        let r = first_role("role X { ~ handler: Event -> Unit / {io.sim.comms} }");
+        if let TypeExpr::Function { effects, .. } = &r.state[0].ty {
+            assert_eq!(effects.len(), 1);
+        } else {
+            panic!("expected Function");
         }
     }
 

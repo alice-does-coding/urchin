@@ -20,7 +20,7 @@ role Hunger {
 
 role EpisodicMemory {
   record: Event -> Unit
-  recall: Cue -> [Episode]
+  recall: Cue -> [Episode] / {io.sim.comms}
 
   ~ episodes: [Episode]
 

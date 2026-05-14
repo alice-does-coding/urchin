@@ -67,6 +67,10 @@ pub enum Token {
     LBracket,
     /// `]`
     RBracket,
+    /// `/` — effect-set separator (`T -> U / {io.http}`).
+    /// `///` (the comment marker) is matched first by the lexer's outer
+    /// padding pass, so a bare `/` only ever lands here.
+    Slash,
     /// `.` for module paths
     Dot,
 }
@@ -127,6 +131,7 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
         just(')').to(Token::RParen),
         just('[').to(Token::LBracket),
         just(']').to(Token::RBracket),
+        just('/').to(Token::Slash),
         just('.').to(Token::Dot),
     ));
 
@@ -366,6 +371,36 @@ mod tests {
         assert_eq!(
             toks("parallel sequence async"),
             vec![Token::KwParallel, Token::KwSequence, Token::KwAsync]
+        );
+    }
+
+    #[test]
+    fn lexes_slash() {
+        assert_eq!(toks("/"), vec![Token::Slash]);
+    }
+
+    #[test]
+    fn triple_slash_still_lexes_as_comment_not_three_slashes() {
+        // `///` is matched as a comment by the outer padding pass,
+        // so it never produces three Slash tokens.
+        assert_eq!(toks("/// hi\n42"), vec![Token::IntLit(42)]);
+    }
+
+    #[test]
+    fn lexes_effect_signature_separator() {
+        assert_eq!(
+            toks("Url -> Result / {io.http}"),
+            vec![
+                Token::Ident("Url".into()),
+                Token::Arrow,
+                Token::Ident("Result".into()),
+                Token::Slash,
+                Token::LBrace,
+                Token::Ident("io".into()),
+                Token::Dot,
+                Token::Ident("http".into()),
+                Token::RBrace,
+            ]
         );
     }
 }

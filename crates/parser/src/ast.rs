@@ -135,12 +135,17 @@ pub enum BinOp {
 }
 
 /// `Function` is right-associative — `A -> B -> C` parses as `A -> (B -> C)`.
-/// Refinement types (`0..1`) and effect annotations (`/ {io.http}`)
-/// get added as the grammar grows.
+/// `effects` carries the optional algebraic-effect set written as
+/// `/ {io.path, io.path}` after the arrow's RHS; an empty vector means
+/// the function is effect-pure (with respect to the IO effect lattice).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeExpr {
     Path(Vec<String>),
-    Function(Box<TypeExpr>, Box<TypeExpr>),
+    Function {
+        from: Box<TypeExpr>,
+        to: Box<TypeExpr>,
+        effects: Vec<Vec<String>>,
+    },
     /// `[T]` — homogeneous list type.
     List(Box<TypeExpr>),
 }
