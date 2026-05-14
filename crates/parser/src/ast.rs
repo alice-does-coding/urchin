@@ -3,9 +3,45 @@
 /// Spans are deliberately omitted for now; they get added when error
 /// messages need them. The shape here mirrors SPEC.md §3.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A `Module` holds the top-level declarations from one source file.
+/// Roles and actors can appear in any order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Module {
     pub roles: Vec<RoleDecl>,
+    pub actors: Vec<ActorDecl>,
+}
+
+/// An actor is minimal per SPEC.md §0.1: composed roles, optional dispatch
+/// declarations (when 2+ composed roles handle the same message type), and
+/// declared IO spines. No actor-level behavior code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActorDecl {
+    pub name: String,
+    pub composed_roles: Vec<Vec<String>>,
+    pub dispatch: Vec<DispatchDecl>,
+    pub io_spines: Vec<IoSpine>,
+}
+
+/// `on TypePath <mode>` — how to fire when 2+ composed roles handle the same type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DispatchDecl {
+    pub message_type: Vec<String>,
+    pub mode: DispatchMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DispatchMode {
+    Parallel,
+    Async,
+    /// `sequence(A -> B -> C)` — handlers fire in declared order.
+    Sequence(Vec<Vec<String>>),
+}
+
+/// `name: io.<path>` — a typed channel into the world (sim or real).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IoSpine {
+    pub name: String,
+    pub io_path: Vec<String>,
 }
 
 /// A role body has up to three sections in order: interface, state, handlers.

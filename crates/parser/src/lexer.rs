@@ -11,7 +11,15 @@ use chumsky::span::SimpleSpan;
 pub enum Token {
     /// `role`
     KwRole,
-    /// `on` — handler header
+    /// `actor`
+    KwActor,
+    /// `parallel` — dispatch mode
+    KwParallel,
+    /// `sequence` — dispatch mode (followed by `(A -> B -> C)`)
+    KwSequence,
+    /// `async` — dispatch mode
+    KwAsync,
+    /// `on` — handler header (in roles) and dispatch decl (in actors)
     KwOn,
     /// `reply` — reply statement
     KwReply,
@@ -83,7 +91,11 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
 
     let ident = text::ident().map(|s: &str| match s {
         "role" => Token::KwRole,
+        "actor" => Token::KwActor,
         "on" => Token::KwOn,
+        "parallel" => Token::KwParallel,
+        "sequence" => Token::KwSequence,
+        "async" => Token::KwAsync,
         "reply" => Token::KwReply,
         "if" => Token::KwIf,
         "else" => Token::KwElse,
@@ -341,6 +353,19 @@ mod tests {
                 Token::Ident("Episode".into()),
                 Token::RBracket,
             ]
+        );
+    }
+
+    #[test]
+    fn lexes_actor_keyword() {
+        assert_eq!(toks("actor"), vec![Token::KwActor]);
+    }
+
+    #[test]
+    fn lexes_dispatch_modes() {
+        assert_eq!(
+            toks("parallel sequence async"),
+            vec![Token::KwParallel, Token::KwSequence, Token::KwAsync]
         );
     }
 }

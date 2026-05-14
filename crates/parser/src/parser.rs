@@ -8,7 +8,8 @@ use chumsky::input::{Input, ValueInput};
 use chumsky::prelude::*;
 
 use crate::ast::{
-    BinOp, CallArg, Expr, Handler, InterfaceMethod, Module, RoleDecl, StateField, Stmt, TypeExpr,
+    ActorDecl, BinOp, CallArg, DispatchDecl, DispatchMode, Expr, Handler, InterfaceMethod, IoSpine,
+    Module, RoleDecl, StateField, Stmt, TypeExpr,
 };
 use crate::lexer::{lex, Span, Token};
 use crate::ParseError;
@@ -38,16 +39,35 @@ pub fn parse(source: &str) -> Result<Module, Vec<ParseError>> {
     })
 }
 
-/// `Module` ::= `RoleDecl`*
+/// `Module` ::= (RoleDecl | ActorDecl)*
+///
+/// Top-level declarations in any order. Either kind sorts into its own
+/// vector on the `Module`.
 fn module_parser<'src, I>(
 ) -> impl Parser<'src, I, Module, extra::Err<Rich<'src, Token, Span>>>
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
-    role_decl_parser()
-        .repeated()
-        .collect::<Vec<_>>()
-        .map(|roles| Module { roles })
+    enum TopLevel {
+        Role(RoleDecl),
+        Actor(ActorDecl),
+    }
+
+    let item = choice((
+        role_decl_parser().map(TopLevel::Role),
+        actor_decl_parser().map(TopLevel::Actor),
+    ));
+
+    item.repeated().collect::<Vec<_>>().map(|items| {
+        let mut module = Module::default();
+        for item in items {
+            match item {
+                TopLevel::Role(r) => module.roles.push(r),
+                TopLevel::Actor(a) => module.actors.push(a),
+            }
+        }
+        module
+    })
 }
 
 /// `RoleDecl` ::= `role` Ident `{` InterfaceMethod* StateField* Handler* `}`
@@ -311,6 +331,93 @@ where
                 None => lhs,
             })
     })
+}
+
+/// `ActorDecl` ::= `actor` Ident `{` (RoleCompose | DispatchDecl | IoSpine)* `}`
+///
+/// The three body item kinds are identified by syntactic shape:
+/// - `RoleCompose`  := bare TypePath (e.g. `Memory.Associative`)
+/// - `DispatchDecl` := `on` TypePath (`parallel` | `async` | `sequence(...)`)
+/// - `IoSpine`      := lower_ident `:` `io.<path>`
+///
+/// Items can appear in any order; the AST collects them into three vectors.
+fn actor_decl_parser<'src, I>(
+) -> impl Parser<'src, I, ActorDecl, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    enum BodyItem {
+        Role(Vec<String>),
+        Dispatch(DispatchDecl),
+        Spine(IoSpine),
+    }
+
+    let segment = select! { Token::Ident(n) => n };
+    let actor_name = select! { Token::Ident(n) => n };
+
+    let dotted = segment
+        .clone()
+        .separated_by(just(Token::Dot))
+        .at_least(1)
+        .collect::<Vec<_>>();
+
+    let dispatch_mode = choice((
+        just(Token::KwParallel).to(DispatchMode::Parallel),
+        just(Token::KwAsync).to(DispatchMode::Async),
+        just(Token::KwSequence)
+            .ignore_then(
+                dotted
+                    .clone()
+                    .separated_by(just(Token::Arrow))
+                    .at_least(1)
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map(DispatchMode::Sequence),
+    ));
+
+    let dispatch = just(Token::KwOn)
+        .ignore_then(dotted.clone())
+        .then(dispatch_mode)
+        .map(|(message_type, mode)| BodyItem::Dispatch(DispatchDecl { message_type, mode }));
+
+    let io_spine = segment
+        .clone()
+        .then_ignore(just(Token::Colon))
+        .then(dotted.clone())
+        .map(|(name, io_path)| BodyItem::Spine(IoSpine { name, io_path }));
+
+    // A bare dotted path (no following `:` and no preceding `on`) is a role
+    // composition. Tried last because the more-specific shapes share its
+    // leading-token shape.
+    let role_compose = dotted.map(BodyItem::Role);
+
+    let body_item = choice((dispatch, io_spine, role_compose));
+
+    just(Token::KwActor)
+        .ignore_then(actor_name)
+        .then(
+            body_item
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map(|(name, items)| {
+            let mut decl = ActorDecl {
+                name,
+                composed_roles: vec![],
+                dispatch: vec![],
+                io_spines: vec![],
+            };
+            for item in items {
+                match item {
+                    BodyItem::Role(r) => decl.composed_roles.push(r),
+                    BodyItem::Dispatch(d) => decl.dispatch.push(d),
+                    BodyItem::Spine(s) => decl.io_spines.push(s),
+                }
+            }
+            decl
+        })
 }
 
 /// `TypeExpr` ::= TypeAtom (`->` TypeExpr)?    -- right-associative function type
@@ -873,6 +980,111 @@ mod tests {
         } else {
             panic!("expected Binary Add, got {e:?}");
         }
+    }
+
+    // --- Actor declarations ---
+
+    fn first_actor(src: &str) -> ActorDecl {
+        let m = parse(src).expect("parse");
+        m.actors.into_iter().next().expect("actor")
+    }
+
+    #[test]
+    fn parses_empty_actor() {
+        let a = first_actor("actor Mind {}");
+        assert_eq!(a.name, "Mind");
+        assert!(a.composed_roles.is_empty());
+        assert!(a.dispatch.is_empty());
+        assert!(a.io_spines.is_empty());
+    }
+
+    #[test]
+    fn parses_actor_with_composed_roles() {
+        let a = first_actor(
+            "actor Mind {
+               Memory.Associative
+               Hunger
+               Voice
+             }",
+        );
+        assert_eq!(a.composed_roles.len(), 3);
+        assert_eq!(
+            a.composed_roles[0],
+            vec!["Memory".to_string(), "Associative".to_string()]
+        );
+        assert_eq!(a.composed_roles[1], vec!["Hunger".to_string()]);
+    }
+
+    #[test]
+    fn parses_actor_with_io_spines() {
+        let a = first_actor(
+            "actor Mind {
+               http: io.http.server
+               clock: io.sim.clock
+             }",
+        );
+        assert_eq!(a.io_spines.len(), 2);
+        assert_eq!(a.io_spines[0].name, "http");
+        assert_eq!(
+            a.io_spines[0].io_path,
+            vec!["io".to_string(), "http".to_string(), "server".to_string()]
+        );
+    }
+
+    #[test]
+    fn parses_dispatch_parallel() {
+        let a = first_actor("actor X { on Stimulus parallel }");
+        assert_eq!(a.dispatch.len(), 1);
+        assert_eq!(a.dispatch[0].mode, DispatchMode::Parallel);
+    }
+
+    #[test]
+    fn parses_dispatch_async() {
+        let a = first_actor("actor X { on Cue async }");
+        assert_eq!(a.dispatch[0].mode, DispatchMode::Async);
+    }
+
+    #[test]
+    fn parses_dispatch_sequence() {
+        let a = first_actor("actor X { on Tick sequence(Voice -> NegativeBias) }");
+        match &a.dispatch[0].mode {
+            DispatchMode::Sequence(roles) => {
+                assert_eq!(roles.len(), 2);
+                assert_eq!(roles[0], vec!["Voice".to_string()]);
+                assert_eq!(roles[1], vec!["NegativeBias".to_string()]);
+            }
+            other => panic!("expected Sequence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_actor_with_all_three_kinds() {
+        let a = first_actor(
+            "actor Mind {
+               Memory.Associative
+               Hunger
+               Voice
+
+               on Tick sequence(Voice -> Memory.Associative)
+
+               http: io.http.server
+               siblings: io.sim.comms.peer
+             }",
+        );
+        assert_eq!(a.composed_roles.len(), 3);
+        assert_eq!(a.dispatch.len(), 1);
+        assert_eq!(a.io_spines.len(), 2);
+    }
+
+    #[test]
+    fn module_can_hold_roles_and_actors_together() {
+        let m = parse(
+            "role Hunger { ~ level: int }
+             actor Mind { Hunger  http: io.http.server }",
+        )
+        .expect("parse");
+        assert_eq!(m.roles.len(), 1);
+        assert_eq!(m.actors.len(), 1);
     }
 
     #[test]
