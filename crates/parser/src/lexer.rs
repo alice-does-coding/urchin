@@ -34,6 +34,8 @@ pub enum Token {
     KwElse,
     /// `broadcast`
     KwBroadcast,
+    /// `match`
+    KwMatch,
     /// PascalCase or snake_case identifier.
     Ident(String),
     /// Integer literal.
@@ -106,6 +108,7 @@ impl fmt::Display for Token {
             Token::KwIf => "if",
             Token::KwElse => "else",
             Token::KwBroadcast => "broadcast",
+            Token::KwMatch => "match",
             Token::Ident(name) => return write!(f, "{name}"),
             Token::IntLit(n) => return write!(f, "{n}"),
             Token::FloatLit(n) => return write!(f, "{n}"),
@@ -162,6 +165,7 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
         "if" => Token::KwIf,
         "else" => Token::KwElse,
         "broadcast" => Token::KwBroadcast,
+        "match" => Token::KwMatch,
         other => Token::Ident(other.to_string()),
     });
 

@@ -146,6 +146,28 @@ pub enum Expr {
     /// `expr.field` — field access. Left-associative, so `a.b.c` parses
     /// as `(a.b).c`.
     FieldAccess { object: Box<Expr>, field: String },
+    /// `match scrutinee { Pat -> body  Pat -> body  ... }`
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    /// Body is always a `Vec<Stmt>`; a bare-expression arm body becomes
+    /// a single `ExprStmt`. A block-bodied arm preserves its statements.
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pattern {
+    /// `_` — matches anything.
+    Wildcard,
+    /// A type path (`Threat`, `Food`, `io.sim.Tick`). For now, no
+    /// destructuring of constructor args; that lands when sum types do.
+    Constructor(Vec<String>),
 }
 
 /// A call argument is either positional (`filter(c)`) or named

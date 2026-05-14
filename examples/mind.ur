@@ -39,7 +39,16 @@ role EpisodicMemory {
 }
 
 role Voice {
-  on Tick {}
+  ~ mood: Mood
+
+  on Tick {
+    match mood {
+      Calm     -> broadcast Hum
+      Anxious  -> broadcast Whisper
+      Excited  -> broadcast Shout
+      _        -> {}
+    }
+  }
 }
 
 actor mind {

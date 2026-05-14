@@ -9,7 +9,8 @@ use chumsky::prelude::*;
 
 use crate::ast::{
     ActorDecl, BinOp, CallArg, DispatchDecl, DispatchMode, Expr, Handler, InterfaceMethod, IoSpine,
-    Module, RoleDecl, RoleInstance, RoleWire, SpineEvent, StateField, Stmt, TypeExpr,
+    MatchArm, Module, Pattern, RoleDecl, RoleInstance, RoleWire, SpineEvent, StateField, Stmt,
+    TypeExpr,
 };
 use crate::lexer::{lex, Span, Token};
 use crate::ParseError;
@@ -167,24 +168,29 @@ where
 ///        | `'if' Expr '{' Stmt* '}' ('else' '{' Stmt* '}')?`
 ///        | `Expr`
 ///
-/// The `Ident '=' …` form covers both local binding and state mutation;
-/// the typechecker distinguishes them by whether `Ident` names sealed state.
-/// Statements have no separator — adjacent statement-starting tokens delimit them.
+/// `Stmt` and `Expr` are mutually recursive — `Stmt` contains expressions
+/// (RHS of assigns, broadcast args, etc.), and `Expr::Match` contains
+/// statement-block arm bodies. Both parsers are built together via nested
+/// `recursive` so the cycle resolves at parse-time, not at parser-build-time.
+/// (Calling `expr_parser()` from inside a `stmt_parser()` definition would
+/// rebuild the parser tree on every call and stack-overflow.)
 fn stmt_parser<'src, I>() -> impl Parser<'src, I, Stmt, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
     recursive(|stmt| {
+        let expr = expr_parser_with_stmt(stmt.clone());
+
         let name = select! { Token::Ident(n) => n };
         let segment = select! { Token::Ident(n) => n };
 
         let assign = name
             .then_ignore(just(Token::Equals))
-            .then(expr_parser())
+            .then(expr.clone())
             .map(|(name, value)| Stmt::Assign { name, value });
 
         let reply = just(Token::KwReply)
-            .ignore_then(expr_parser())
+            .ignore_then(expr.clone())
             .map(Stmt::Reply);
 
         let type_path = segment
@@ -193,8 +199,8 @@ where
             .at_least(1)
             .collect::<Vec<_>>();
 
-        // Optional arg list: present iff `(` follows the type path.
-        let args = expr_parser()
+        let args = expr
+            .clone()
             .separated_by(just(Token::Comma))
             .allow_trailing()
             .collect::<Vec<_>>()
@@ -214,7 +220,7 @@ where
             .delimited_by(just(Token::LBrace), just(Token::RBrace));
 
         let if_stmt = just(Token::KwIf)
-            .ignore_then(expr_parser())
+            .ignore_then(expr.clone())
             .then(block.clone())
             .then(just(Token::KwElse).ignore_then(block).or_not())
             .map(|((cond, then_body), else_body)| Stmt::If {
@@ -223,9 +229,7 @@ where
                 else_body,
             });
 
-        // ExprStmt is tried last: keyword-led forms have distinguishing leading
-        // tokens, so this only catches expressions that start otherwise.
-        let expr_stmt = expr_parser().map(Stmt::ExprStmt);
+        let expr_stmt = expr.map(Stmt::ExprStmt);
 
         choice((if_stmt, broadcast, reply, assign, expr_stmt))
     })
@@ -242,9 +246,15 @@ where
 ///
 /// `~>` is right-associative because `a ~> b ~> c` semantically chains
 /// state-shift transformations; left-assoc would imply collapsing earlier.
-fn expr_parser<'src, I>() -> impl Parser<'src, I, Expr, extra::Err<Rich<'src, Token, Span>>> + Clone
+///
+/// Takes a `stmt` parameter so the match-arm-block recursion can resolve
+/// — see `stmt_parser` for the pairing.
+fn expr_parser_with_stmt<'src, I, S>(
+    stmt: S,
+) -> impl Parser<'src, I, Expr, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
+    S: Parser<'src, I, Stmt, extra::Err<Rich<'src, Token, Span>>> + Clone + 'src,
 {
     recursive(|expr| {
         let int = select! { Token::IntLit(n) => Expr::Int(n) };
@@ -288,11 +298,59 @@ where
             .delimited_by(just(Token::LBracket), just(Token::RBracket))
             .map(Expr::List);
 
+        // Pattern: `_` (wildcard) or a dotted path (constructor).
+        let pat_segment = select! { Token::Ident(n) => n };
+        let pattern = pat_segment
+            .clone()
+            .separated_by(just(Token::Dot))
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .map(|segs| {
+                if segs.len() == 1 && segs[0] == "_" {
+                    Pattern::Wildcard
+                } else {
+                    Pattern::Constructor(segs)
+                }
+            });
+
+        // Match arm body: either a `{ stmt* }` block or a single statement
+        // (which can itself be a bare expression via Stmt::ExprStmt). Both
+        // lower to a `Vec<Stmt>` for AST uniformity. Using `stmt` here
+        // (not `expr`) means `Calm -> broadcast Hum` parses — broadcast is
+        // a statement-form, not an expression.
+        let arm_block = stmt
+            .clone()
+            .repeated()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace));
+        let arm_single = stmt.clone().map(|s| vec![s]);
+        let arm_body = choice((arm_block, arm_single));
+
+        let match_arm = pattern
+            .then_ignore(just(Token::Arrow))
+            .then(arm_body)
+            .map(|(pattern, body)| MatchArm { pattern, body });
+
+        // `match scrutinee { arm* }` — arms are whitespace-separated; the
+        // expression parser stops at non-operator tokens, so the next arm's
+        // pattern naturally ends the previous arm's body.
+        let match_expr = just(Token::KwMatch)
+            .ignore_then(expr.clone())
+            .then(
+                match_arm
+                    .repeated()
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .map(|(scrutinee, arms)| Expr::Match {
+                scrutinee: Box::new(scrutinee),
+                arms,
+            });
+
         // Try `call` before bare `ident` — both start with `Ident`,
-        // and chumsky picks the first-matching branch. `float` is tried
-        // before `int` because the lexer already separates them; the order
-        // here just keeps `parse(...)` predictable.
-        let primary = choice((float, int, string, call, ident, list, parens));
+        // and chumsky picks the first-matching branch. `match` is keyword-led
+        // so it's unambiguous.
+        let primary = choice((match_expr, float, int, string, call, ident, list, parens));
 
         // Field access: `.field` chained any number of times after a primary.
         // Left-associative: `a.b.c` parses as `(a.b).c`.
@@ -1001,6 +1059,83 @@ mod tests {
             assert!(matches!(**to, TypeExpr::List(_)));
         } else {
             panic!("expected Function type");
+        }
+    }
+
+    // --- Match expressions ---
+
+    #[test]
+    fn parses_match_with_two_arms() {
+        let body = handler_body(
+            "role X { on Stimulus s { match s { Threat -> retreat() Food -> approach() } } }",
+        );
+        match &body[0] {
+            Stmt::ExprStmt(Expr::Match { scrutinee, arms }) => {
+                assert!(matches!(**scrutinee, Expr::Ident(_)));
+                assert_eq!(arms.len(), 2);
+                match &arms[0].pattern {
+                    Pattern::Constructor(p) => assert_eq!(p, &vec!["Threat".to_string()]),
+                    _ => panic!(),
+                }
+            }
+            other => panic!("expected Match expr stmt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_wildcard_pattern() {
+        let body = handler_body(
+            "role X { on S s { match s { Threat -> retreat() _ -> idle() } } }",
+        );
+        if let Stmt::ExprStmt(Expr::Match { arms, .. }) = &body[0] {
+            assert_eq!(arms[1].pattern, Pattern::Wildcard);
+        } else {
+            panic!("expected Match");
+        }
+    }
+
+    #[test]
+    fn parses_dotted_constructor_pattern() {
+        let body = handler_body(
+            "role X { on E e { match e { io.sim.Tick -> tick() } } }",
+        );
+        if let Stmt::ExprStmt(Expr::Match { arms, .. }) = &body[0] {
+            match &arms[0].pattern {
+                Pattern::Constructor(p) => assert_eq!(p.len(), 3),
+                _ => panic!(),
+            }
+        } else {
+            panic!("expected Match");
+        }
+    }
+
+    #[test]
+    fn parses_block_bodied_arm() {
+        let body = handler_body(
+            "role X { on S s { match s { Threat -> { broadcast Retreat reply 1 } _ -> 0 } } }",
+        );
+        if let Stmt::ExprStmt(Expr::Match { arms, .. }) = &body[0] {
+            assert_eq!(arms[0].body.len(), 2);
+            assert!(matches!(arms[0].body[0], Stmt::Broadcast { .. }));
+            assert!(matches!(arms[0].body[1], Stmt::Reply(_)));
+            // Wildcard arm has bare-expr body wrapped to one ExprStmt.
+            assert_eq!(arms[1].body.len(), 1);
+            assert!(matches!(arms[1].body[0], Stmt::ExprStmt(_)));
+        } else {
+            panic!("expected Match");
+        }
+    }
+
+    #[test]
+    fn match_can_be_assigned_to_a_local() {
+        let body = handler_body(
+            "role X { on S s { decision = match s { Yes -> 1 No -> 0 } } }",
+        );
+        match &body[0] {
+            Stmt::Assign { name, value: Expr::Match { .. } } => {
+                assert_eq!(name, "decision");
+            }
+            other => panic!("expected Assign with Match value, got {other:?}"),
         }
     }
 
