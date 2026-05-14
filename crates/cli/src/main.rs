@@ -1,6 +1,6 @@
 //! `urchin` — the language CLI.
 //!
-//! First subcommand: `urchin parse <file>` — lex + parse a `.ur` file
+//! First subcommand: `urchin parse <file>` — lex + parse a `.urchin` file
 //! and pretty-print the resulting AST. Errors render through ariadne
 //! with source-pointing labels.
 

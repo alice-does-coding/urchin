@@ -656,13 +656,13 @@ mod tests {
 
     #[test]
     fn idempotent_on_full_mind_example() {
-        let src = std::fs::read_to_string("../../examples/mind.ur").expect("read mind.ur");
+        let src = std::fs::read_to_string("../../examples/agent.urchin").expect("read agent.urchin");
         idempotent(&src);
     }
 
     #[test]
     fn round_trips_full_mind_example() {
-        let src = std::fs::read_to_string("../../examples/mind.ur").expect("read mind.ur");
+        let src = std::fs::read_to_string("../../examples/agent.urchin").expect("read agent.urchin");
         round_trip(&src);
     }
 

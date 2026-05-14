@@ -14,7 +14,7 @@ _Living draft. Started 2026-05-13. Companion to `DIRECTION.md` (vision) and the 
 6. [IO grammar](#6-io-grammar) — **sketch**
 7. Error & effect model _(TBD — algebraic effects with handlers, see §0.1)_
 8. Stdlib role taxonomy _(TBD)_
-9. Worked examples _(TBD — the seed corpus; see `examples/mind.ur` for the first)_
+9. Worked examples _(TBD — the seed corpus; see `examples/agent.urchin` for the first)_
 10. [Open questions / deferred decisions](#10-open-questions)
 
 ---
@@ -163,7 +163,7 @@ call              = lower_ident '(' (expr (',' expr)*)? ')'
 ### 3.3 Canonical example **(parsed)**
 
 ```ur
-/// from examples/mind.ur
+/// from examples/agent.urchin
 role EpisodicMemory {
   record: Event -> Unit
   recall: Cue -> int
