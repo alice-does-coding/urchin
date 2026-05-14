@@ -13,18 +13,36 @@ pub enum Token {
     KwRole,
     /// `on` — handler header
     KwOn,
+    /// `reply` — reply statement
+    KwReply,
     /// PascalCase or snake_case identifier.
     Ident(String),
+    /// Integer literal.
+    IntLit(i64),
     /// `~`
     Tilde,
     /// `:`
     Colon,
-    /// `->` — function-type and value-flow arrow
+    /// `=` — binding
+    Equals,
+    /// `+` — addition (the only arithmetic op for now)
+    Plus,
+    /// `,`
+    Comma,
+    /// `->` — function-type / value-flow arrow
     Arrow,
+    /// `~>` — state shift (the journal hook)
+    TildeArrow,
+    /// `|>` — pipe (the lightsaber)
+    Pipe,
     /// `{`
     LBrace,
     /// `}`
     RBrace,
+    /// `(`
+    LParen,
+    /// `)`
+    RParen,
     /// `.` for module paths
     Dot,
 }
@@ -50,21 +68,33 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
     let ident = text::ident().map(|s: &str| match s {
         "role" => Token::KwRole,
         "on" => Token::KwOn,
+        "reply" => Token::KwReply,
         other => Token::Ident(other.to_string()),
     });
 
-    // `->` must be tried before `-` would be (no minus token yet, but the
-    // pattern keeps multi-char punctuation greedy).
+    let int = text::int(10)
+        .to_slice()
+        .map(|s: &str| Token::IntLit(s.parse().expect("lexed digits parse as i64")));
+
+    // Multi-char operators must beat their single-char prefixes — `~>` before
+    // `~`, `|>` before any future `|`, `->` before any future `-`.
     let punct = choice((
         just("->").to(Token::Arrow),
+        just("~>").to(Token::TildeArrow),
+        just("|>").to(Token::Pipe),
         just('~').to(Token::Tilde),
         just(':').to(Token::Colon),
+        just('=').to(Token::Equals),
+        just('+').to(Token::Plus),
+        just(',').to(Token::Comma),
         just('{').to(Token::LBrace),
         just('}').to(Token::RBrace),
+        just('(').to(Token::LParen),
+        just(')').to(Token::RParen),
         just('.').to(Token::Dot),
     ));
 
-    let token = choice((ident, punct));
+    let token = choice((int, ident, punct));
 
     token
         .map_with(|tok, e| (tok, e.span()))
@@ -177,6 +207,58 @@ mod tests {
                 Token::Ident("Tick".into()),
                 Token::LBrace,
                 Token::RBrace,
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_int_literal() {
+        assert_eq!(toks("42"), vec![Token::IntLit(42)]);
+    }
+
+    #[test]
+    fn lexes_state_shift_greedily_over_tilde() {
+        // `~>` must beat `~` — otherwise we'd lex Tilde then a stray `>`.
+        assert_eq!(toks("~>"), vec![Token::TildeArrow]);
+    }
+
+    #[test]
+    fn lexes_pipe() {
+        assert_eq!(toks("|>"), vec![Token::Pipe]);
+    }
+
+    #[test]
+    fn lexes_reply_keyword() {
+        assert_eq!(toks("reply"), vec![Token::KwReply]);
+    }
+
+    #[test]
+    fn lexes_state_mutation_statement() {
+        assert_eq!(
+            toks("level = level ~> level + 1"),
+            vec![
+                Token::Ident("level".into()),
+                Token::Equals,
+                Token::Ident("level".into()),
+                Token::TildeArrow,
+                Token::Ident("level".into()),
+                Token::Plus,
+                Token::IntLit(1),
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_function_call() {
+        assert_eq!(
+            toks("filter(traces, c)"),
+            vec![
+                Token::Ident("filter".into()),
+                Token::LParen,
+                Token::Ident("traces".into()),
+                Token::Comma,
+                Token::Ident("c".into()),
+                Token::RParen,
             ]
         );
     }
