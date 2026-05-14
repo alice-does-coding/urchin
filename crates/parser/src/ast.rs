@@ -67,6 +67,8 @@ pub enum Expr {
     Binary(BinOp, Box<Expr>, Box<Expr>),
     /// `name(arg, arg, ...)`
     Call { callee: String, args: Vec<Expr> },
+    /// `[a, b, c]` — list literal. Empty list `[]` is allowed.
+    List(Vec<Expr>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,10 +88,12 @@ pub enum BinOp {
 }
 
 /// `Function` is right-associative — `A -> B -> C` parses as `A -> (B -> C)`.
-/// Refinement types (`0..1`), generics (`[Trace]`), and effect annotations
-/// (`/ {io.http}`) get added as the grammar grows.
+/// Refinement types (`0..1`) and effect annotations (`/ {io.http}`)
+/// get added as the grammar grows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeExpr {
     Path(Vec<String>),
     Function(Box<TypeExpr>, Box<TypeExpr>),
+    /// `[T]` — homogeneous list type.
+    List(Box<TypeExpr>),
 }

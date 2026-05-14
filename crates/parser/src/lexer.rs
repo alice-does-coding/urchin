@@ -55,6 +55,10 @@ pub enum Token {
     LParen,
     /// `)`
     RParen,
+    /// `[` — list types and list literals
+    LBracket,
+    /// `]`
+    RBracket,
     /// `.` for module paths
     Dot,
 }
@@ -109,6 +113,8 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
         just('}').to(Token::RBrace),
         just('(').to(Token::LParen),
         just(')').to(Token::RParen),
+        just('[').to(Token::LBracket),
+        just(']').to(Token::RBracket),
         just('.').to(Token::Dot),
     ));
 
@@ -317,6 +323,23 @@ mod tests {
                 Token::KwBroadcast,
                 Token::Ident("Wants".into()),
                 Token::RBrace,
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_brackets() {
+        assert_eq!(toks("[]"), vec![Token::LBracket, Token::RBracket]);
+    }
+
+    #[test]
+    fn lexes_list_type() {
+        assert_eq!(
+            toks("[Episode]"),
+            vec![
+                Token::LBracket,
+                Token::Ident("Episode".into()),
+                Token::RBracket,
             ]
         );
     }

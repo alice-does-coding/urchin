@@ -1,24 +1,21 @@
 /// episodic_memory.ur — the urchin's first dogfood role from the
 /// research domain. an EpisodicMemory records events as they happen
-/// and replies to cues with what it remembers.
+/// and replies to cues with the episodes it remembers.
 ///
-/// some shapes are stand-ins until later grammar slices land:
-///   - `count` is an int because list types don't exist yet —
-///     the real role would carry `~ episodes: [Episode]`.
-///   - `Unit` is a placeholder for the empty-return type.
-///   - the `Cue -> int` reply is a stand-in for `Cue -> [Episode]`.
+/// `Episode` is an opaque path here because record types don't exist
+/// in the grammar yet — the Episode shape will fill in when §2 lands.
 
 role EpisodicMemory {
   record: Event -> Unit
-  recall: Cue -> int
+  recall: Cue -> [Episode]
 
-  ~ count: int
+  ~ episodes: [Episode]
 
   on Event e {
-    count = count ~> count + 1
+    episodes = episodes ~> episodes + [e]
   }
 
   on Cue c {
-    reply count
+    reply episodes
   }
 }

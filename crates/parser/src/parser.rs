@@ -246,9 +246,18 @@ where
             )
             .map(|(callee, args)| Expr::Call { callee, args });
 
+        // List literal: `[a, b, c]`. Empty `[]` is allowed.
+        let list = expr
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map(Expr::List);
+
         // Try `call` before bare `ident` — both start with `Ident`,
         // and chumsky picks the first-matching branch.
-        let atom = choice((int, call, ident, parens));
+        let atom = choice((int, call, ident, list, parens));
 
         // `+` (left-assoc, tightest binary op).
         let add = atom.clone().foldl(
@@ -285,7 +294,8 @@ where
 }
 
 /// `TypeExpr` ::= TypeAtom (`->` TypeExpr)?    -- right-associative function type
-/// `TypeAtom` ::= Ident (`.` Ident)*
+/// `TypeAtom` ::= `[` TypeExpr `]`              -- list type
+///              | Ident (`.` Ident)*
 fn type_expr_parser<'src, I>(
 ) -> impl Parser<'src, I, TypeExpr, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -293,11 +303,18 @@ where
 {
     recursive(|type_expr| {
         let segment = select! { Token::Ident(n) => n };
-        let atom = segment
+        let path = segment
             .separated_by(just(Token::Dot))
             .at_least(1)
             .collect::<Vec<_>>()
             .map(TypeExpr::Path);
+
+        let list = type_expr
+            .clone()
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map(|inner| TypeExpr::List(Box::new(inner)));
+
+        let atom = choice((list, path));
 
         atom.foldl(
             just(Token::Arrow).ignore_then(type_expr).repeated().at_most(1),
@@ -694,6 +711,66 @@ mod tests {
     }
 
     // --- The canonical reactive shape ---
+
+    // --- List types ---
+
+    #[test]
+    fn parses_list_type_in_state() {
+        let r = first_role("role X { ~ episodes: [Episode] }");
+        assert_eq!(
+            r.state[0].ty,
+            TypeExpr::List(Box::new(TypeExpr::Path(vec!["Episode".into()])))
+        );
+    }
+
+    #[test]
+    fn parses_function_returning_list() {
+        let r = first_role("role X { recall: Cue -> [Trace] }");
+        if let TypeExpr::Function(_, ret) = &r.interface[0].ty {
+            assert!(matches!(**ret, TypeExpr::List(_)));
+        } else {
+            panic!("expected Function type");
+        }
+    }
+
+    #[test]
+    fn parses_nested_list_type() {
+        let r = first_role("role X { ~ matrix: [[int]] }");
+        assert_eq!(
+            r.state[0].ty,
+            TypeExpr::List(Box::new(TypeExpr::List(Box::new(TypeExpr::Path(vec![
+                "int".into()
+            ])))))
+        );
+    }
+
+    // --- List literals ---
+
+    #[test]
+    fn parses_empty_list_literal() {
+        assert_eq!(parse_expr_in_handler("[]"), Expr::List(vec![]));
+    }
+
+    #[test]
+    fn parses_list_literal_with_elements() {
+        assert_eq!(
+            parse_expr_in_handler("[1, 2, 3]"),
+            Expr::List(vec![Expr::Int(1), Expr::Int(2), Expr::Int(3)])
+        );
+    }
+
+    #[test]
+    fn parses_list_concat_with_addition() {
+        // `episodes + [e]` — typechecker may or may not allow this for lists,
+        // but the parser just produces a Binary(Add, ident, list).
+        let e = parse_expr_in_handler("episodes + [e]");
+        if let Expr::Binary(BinOp::Add, lhs, rhs) = &e {
+            assert!(matches!(**lhs, Expr::Ident(_)));
+            assert!(matches!(**rhs, Expr::List(_)));
+        } else {
+            panic!("expected Binary Add, got {e:?}");
+        }
+    }
 
     #[test]
     fn parses_canonical_hunger_handler() {
