@@ -6,17 +6,21 @@
 use chumsky::prelude::*;
 use chumsky::span::SimpleSpan;
 
-/// Tokens for the minimal Urchin subset. Grows as the grammar grows.
+/// Tokens for the current Urchin subset. Grows as the grammar grows.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Token {
     /// `role`
     KwRole,
+    /// `on` — handler header
+    KwOn,
     /// PascalCase or snake_case identifier.
     Ident(String),
     /// `~`
     Tilde,
     /// `:`
     Colon,
+    /// `->` — function-type and value-flow arrow
+    Arrow,
     /// `{`
     LBrace,
     /// `}`
@@ -45,10 +49,14 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
 
     let ident = text::ident().map(|s: &str| match s {
         "role" => Token::KwRole,
+        "on" => Token::KwOn,
         other => Token::Ident(other.to_string()),
     });
 
+    // `->` must be tried before `-` would be (no minus token yet, but the
+    // pattern keeps multi-char punctuation greedy).
     let punct = choice((
+        just("->").to(Token::Arrow),
         just('~').to(Token::Tilde),
         just(':').to(Token::Colon),
         just('{').to(Token::LBrace),
@@ -132,6 +140,43 @@ mod tests {
                 Token::Ident("Memory".into()),
                 Token::Dot,
                 Token::Ident("Associative".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_arrow() {
+        assert_eq!(toks("->"), vec![Token::Arrow]);
+    }
+
+    #[test]
+    fn lexes_function_type_signature() {
+        assert_eq!(
+            toks("recall: Cue -> Trace"),
+            vec![
+                Token::Ident("recall".into()),
+                Token::Colon,
+                Token::Ident("Cue".into()),
+                Token::Arrow,
+                Token::Ident("Trace".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_on_keyword() {
+        assert_eq!(toks("on"), vec![Token::KwOn]);
+    }
+
+    #[test]
+    fn lexes_handler_header() {
+        assert_eq!(
+            toks("on Tick {}"),
+            vec![
+                Token::KwOn,
+                Token::Ident("Tick".into()),
+                Token::LBrace,
+                Token::RBrace,
             ]
         );
     }

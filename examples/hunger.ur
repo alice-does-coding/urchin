@@ -1,8 +1,12 @@
 /// hunger.ur — the urchin's smallest dogfood role.
-/// targets the minimum grammar slice currently parseable: role header
-/// plus state fields with dotted-path types. handlers, expressions,
-/// and effects come as the parser grows.
+/// targets the current grammar slice: interface methods, state fields,
+/// and handler headers. handler bodies (expressions, pipes, mutations)
+/// land in the next slice.
 
 role Hunger {
+  is_satisfied: Tick -> Bool
+
   ~ level: int
+
+  on Tick {}
 }
