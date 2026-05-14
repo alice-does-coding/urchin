@@ -242,7 +242,7 @@ mod tests {
     fn fails_for_broadcast_inside_if() {
         let src = "
             role hunger {
-              ~ level: int
+              level = 0
               on tick {
                 if level > 0 { broadcast wants }
               }

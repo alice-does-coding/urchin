@@ -1,125 +1,74 @@
 /// agent.urchin — seed corpus for urchin. file flow is small-to-large:
-/// roles first (atomic components), then the child actor (mind), then
-/// the parent actor (rubberDuck) at the bottom. the reader builds up
-/// intuition piece by piece.
+/// roles first (atomic creative activities), then the child actor
+/// (creativePersona), then the parent actor (rubberDuck) at the bottom.
 ///
-/// roles and actors carry STRICT SECTION MARKERS — `/// _interface`,
-/// `/// _state`, `/// _handlers` in roles; `/// _io`, `/// _roles`,
-/// `/// _dispatch_scripts` in actors. markers make the structure
-/// visible at the syntactic level. the parser tolerates them being
-/// absent for legacy code, but idiomatic urchin always includes them.
+/// the topology: rubberDuck (a persona on the social-media simulation)
+/// HAS a creativePersona (the slot that holds creative output). the
+/// creativePersona composes three creative roles — photographer,
+/// musician, director — each producing its own kind of output as the
+/// world ticks.
 ///
-/// state fields no longer carry the `~` prefix — the `/// _state`
-/// section marker already says "everything below is state." mutations
-/// still use `~>` (the journal hook earns its keep at the runtime side).
-/// state fields can carry an optional `= init` default.
+/// state fields use init-required-and-inferred form: `name = init`.
+/// no leading `~` (the `/// _state` marker carries the section identity);
+/// no type annotation (inferred from init); collections are just
+/// collections (no `[T]` annotation needed).
+///
+/// roles have NO interface methods. cross-role coordination happens via
+/// broadcasts and message handlers; cross-IO interfaces (the protocol
+/// each io.* module enforces) are a separate concern at the IO layer.
 
-role hunger {
+role photographer {
   /// _state
-  level: float = 0.0
+  shotsTaken = 0
+  lastSubject = ""
+
+  /// _handlers
+  on subject s {
+    shotsTaken = shotsTaken ~> shotsTaken + 1
+    lastSubject = lastSubject ~> s
+  }
+}
+
+role musician {
+  /// _state
+  notesPlayed = 0
+  recentMood = "calm"
 
   /// _handlers
   on tick {
-    level = level ~> level + 0.01
-    if level > 0.7 {
-      broadcast wants("food")
-    }
+    notesPlayed = notesPlayed ~> notesPlayed + 1
+  }
+
+  on mood m {
+    recentMood = recentMood ~> m
   }
 }
 
-role episodicMemory {
-  /// _interface
-  record: event -> unit
-  recall: cue -> [episode]
-
+role director {
   /// _state
-  episodes: [episode] = []
-
-  /// _handlers
-  on event e {
-    episodes = episodes ~> episodes + [e]
-  }
-
-  on cue c {
-    matches = episodes
-      |> filter(by: c)
-      |> rank(by: c.weight)
-    reply matches
-  }
-}
-
-role voice {
-  /// _state
-  mood: mood = calm
+  scenesDirected = 0
+  currentScene = ""
 
   /// _handlers
   on tick {
-    match mood {
-      calm     -> mood = mood ~> calm
-      anxious  -> mood = mood ~> anxious
-      excited  -> mood = mood ~> calm
-      _        -> {}
-    }
-  }
-
-  on wants need {
-    mood = mood ~> anxious
+    scenesDirected = scenesDirected ~> scenesDirected + 1
   }
 }
 
-role listener {
-  /// _state
-  heard: [utterance] = []
-
-  /// _handlers
-  on utterance u {
-    heard = heard ~> heard + [u]
-  }
-}
-
-role prompter {
-  /// _interface
-  ask: utterance -> question / {io.anthropic.haiku}
-
-  /// _state
-  recentQuestion: question
-
-  /// _handlers
-  on utterance u {
-    q = ask(u)
-    recentQuestion = recentQuestion ~> q
-    broadcast question(q)
-  }
-}
-
-role mouth {
-  /// _handlers
-  on question q {}
-}
-
-actor mind @ rubberDuck {
+actor creativePersona @ rubberDuck {
   /// _io
   clock: io.sim.clock
 
   /// _roles
-  episodicMemory(clock)
-  voice(clock)(episodicMemory -> recall)
-  hunger(clock)
+  photographer(clock)
+  musician(clock)
+  director(clock)
 
   /// _dispatch_scripts
-  on clock.tick sequence(hunger -> voice)
+  on clock.tick parallel
 }
 
 actor rubberDuck {
   /// _io
-  llm:      io.anthropic.haiku
   siblings: io.sim.comms.peer
-
-  /// _roles
-  listener()
-  prompter(llm)
-  mouth()
-
-  /// _dispatch_scripts
-  on siblings.utterance sequence(listener -> prompter)
 }

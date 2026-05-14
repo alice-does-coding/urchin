@@ -8,9 +8,8 @@ use chumsky::input::{Input, ValueInput};
 use chumsky::prelude::*;
 
 use crate::ast::{
-    ActorDecl, BinOp, CallArg, DispatchDecl, DispatchMode, Expr, Handler, InterfaceMethod, IoSpine,
-    MatchArm, Module, Pattern, RoleDecl, RoleInstance, RoleWire, SpineEvent, StateField, Stmt,
-    TypeExpr,
+    ActorDecl, BinOp, CallArg, DispatchDecl, DispatchMode, Expr, Handler, IoSpine, MatchArm,
+    Module, Pattern, RoleDecl, RoleInstance, SpineEvent, StateField, Stmt, TypeExpr,
 };
 use crate::lexer::{lex, Span, Token};
 use crate::ParseError;
@@ -73,13 +72,13 @@ where
 }
 
 /// `RoleDecl` ::= `role` Ident `{`
-///                   ( `/// _interface` InterfaceMethod* )?
-///                   ( `/// _state`     StateField*      )?
-///                   ( `/// _handlers`  Handler*         )?
+///                   ( `/// _state`     StateField* )?
+///                   ( `/// _handlers`  Handler*    )?
 ///                 `}`
 ///
-/// Section markers are REQUIRED when their section has content; absent
-/// when the section is empty. Sections appear in strict canonical order.
+/// Roles have two sections: state and handlers. Interface methods were
+/// dropped — cross-role coordination happens through broadcasts and
+/// message handlers, not through method-wire bindings.
 fn role_decl_parser<'src, I>(
 ) -> impl Parser<'src, I, RoleDecl, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -87,16 +86,6 @@ where
 {
     let name = select! { Token::Ident(n) => n };
 
-    // Two parsing strategies, both accepted:
-    //   (a) New canonical form — explicit `/// _state` etc. markers, no `~`
-    //   (b) Legacy form — implicit by syntactic shape, `~` on state fields
-    //
-    // Strategy (a) is tried first via section_marker; strategy (b) falls
-    // out naturally because state_field_parser tolerates `~` and interface
-    // method parser tries `name: type` shapes that don't start with `~`.
-    let interface_section = section_marker("interface")
-        .or_not()
-        .ignore_then(interface_method_parser().repeated().collect::<Vec<_>>());
     let state_section = section_marker("state")
         .or_not()
         .ignore_then(state_field_parser().repeated().collect::<Vec<_>>());
@@ -104,65 +93,45 @@ where
         .or_not()
         .ignore_then(handler_parser().repeated().collect::<Vec<_>>());
 
-    let body = interface_section
-        .then(state_section)
+    let body = state_section
         .then(handlers_section)
         .delimited_by(just(Token::LBrace), just(Token::RBrace));
 
     just(Token::KwRole)
         .ignore_then(name)
         .then(body)
-        .map(|(name, ((interface, state), handlers))| RoleDecl {
+        .map(|(name, (state, handlers))| RoleDecl {
             name,
-            interface,
             state,
             handlers,
         })
 }
 
-/// `InterfaceMethod` ::= Ident `:` TypeExpr
+/// `StateField` ::= `~`? Ident ( `:` TypeExpr )? `=` InitExpr
 ///
-/// Lives under the `/// _interface` section marker.
-fn interface_method_parser<'src, I>(
-) -> impl Parser<'src, I, InterfaceMethod, extra::Err<Rich<'src, Token, Span>>> + Clone
-where
-    I: ValueInput<'src, Token = Token, Span = Span>,
-{
-    let name = select! { Token::Ident(n) => n };
-
-    name.then_ignore(just(Token::Colon))
-        .then(type_expr_parser())
-        .map(|(name, ty)| InterfaceMethod { name, ty })
-}
-
-/// `StateField` ::= `~`? Ident `:` TypeExpr ( `=` InitExpr )?
+/// Init is REQUIRED. Type annotation is OPTIONAL — the type is inferred
+/// from the init value. Canonical form: `level = 0.0`. Legacy form
+/// `level: float = 0.0` still parses for migration. Leading `~` is also
+/// tolerated for legacy code without `/// _state` markers.
 ///
-/// The leading `~` is OPTIONAL — required only when there's no `/// _state`
-/// section marker to disambiguate state from interface methods. The
-/// canonical form (with marker, no `~`) and the legacy form (no marker,
-/// `~` required) both parse. Optional `= init` is the value the runtime
-/// uses to seed the field on instantiation.
-///
-/// `InitExpr` is a deliberately small subset of `Expr` (literals,
-/// idents, list literals) — state initializers are declarative defaults
-/// at role-declaration time, not arbitrary computations. Keeps the
-/// parser out of the stmt↔expr mutual recursion this function lives
-/// outside of.
+/// `InitExpr` is a deliberately small subset of `Expr` (literals, idents,
+/// list literals) — state initializers are declarative defaults at
+/// role-declaration time, not arbitrary computations.
 fn state_field_parser<'src, I>(
 ) -> impl Parser<'src, I, StateField, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
     let name = select! { Token::Ident(n) => n };
-    let init = just(Token::Equals)
-        .ignore_then(state_init_parser())
+    let ty_annotation = just(Token::Colon)
+        .ignore_then(type_expr_parser())
         .or_not();
+    let init = just(Token::Equals).ignore_then(state_init_parser());
 
     just(Token::Tilde)
         .or_not()
         .ignore_then(name)
-        .then_ignore(just(Token::Colon))
-        .then(type_expr_parser())
+        .then(ty_annotation)
         .then(init)
         .map(|((name, ty), init)| StateField { name, ty, init })
 }
@@ -489,17 +458,16 @@ where
     })
 }
 
-/// `ActorDecl` ::= `actor` ident `{` IoSpine* RoleInstance* DispatchDecl* `}`
+/// `ActorDecl` ::= `actor` ident ( `@` ident )? `{`
+///                    IoSpine* RoleInstance* DispatchDecl*
+///                  `}`
 ///
-/// Body sections are strictly ordered per SPEC.md (§4 sketch / 2026-05-14):
-/// IO spines first (the substrate the actor talks to), then role instances
-/// with their IO + role-to-role wiring, then dispatch declarations. Each
-/// section can be empty. Order is enforced — an IO spine after a role
-/// instance is a parse error.
+/// Body sections appear in canonical order: IO spines, then role instances,
+/// then dispatch declarations. Each section is optional. The optional
+/// `@ parent` clause positions this actor in the topology tree.
 ///
 /// `IoSpine`      := ident `:` `io.<path>`
-/// `RoleInstance` := ident `(` ident_list? `)` ( `(` wire_list? `)` )?
-/// `Wire`         := ident `->` ident
+/// `RoleInstance` := ident `(` ident_list? `)`
 /// `DispatchDecl` := `on` ident `.` ident DispatchMode
 fn actor_decl_parser<'src, I>(
 ) -> impl Parser<'src, I, ActorDecl, extra::Err<Rich<'src, Token, Span>>> + Clone
@@ -522,31 +490,19 @@ where
         .then(io_path)
         .map(|(name, io_path)| IoSpine { name, io_path });
 
-    // Role instance: `name(io_args)(wires)?`. The `(` distinguishes it
-    // from an IO spine (which uses `:`).
+    // Role instance: `name(io_args)`. The `(` distinguishes it from an IO
+    // spine (which uses `:`). Cross-role coordination happens via broadcasts;
+    // there are no method-wires to bind anymore.
     let ident_list = segment
         .clone()
         .separated_by(just(Token::Comma))
         .allow_trailing()
         .collect::<Vec<_>>()
         .delimited_by(just(Token::LParen), just(Token::RParen));
-    let wire = segment
-        .clone()
-        .then_ignore(just(Token::Arrow))
-        .then(segment.clone())
-        .map(|(source, method)| RoleWire { source, method });
-    let wire_list = wire
-        .separated_by(just(Token::Comma))
-        .allow_trailing()
-        .collect::<Vec<_>>()
-        .delimited_by(just(Token::LParen), just(Token::RParen))
-        .or_not()
-        .map(Option::unwrap_or_default);
     let role_instance = segment
         .clone()
         .then(ident_list)
-        .then(wire_list)
-        .map(|((name, io_args), wires)| RoleInstance { name, io_args, wires });
+        .map(|(name, io_args)| RoleInstance { name, io_args });
 
     // Dispatch decl: `on spine.event <mode>`. The `on` keyword
     // distinguishes it from a role instance.
@@ -691,31 +647,38 @@ mod tests {
     fn parses_empty_role() {
         let r = first_role("role Hunger {}");
         assert_eq!(r.name, "Hunger");
-        assert!(r.interface.is_empty());
         assert!(r.state.is_empty());
         assert!(r.handlers.is_empty());
     }
 
     #[test]
     fn parses_role_with_one_state_field() {
-        let r = first_role("role Hunger { ~ level: int }");
+        let r = first_role("role Hunger { level = 0 }");
         assert_eq!(r.state.len(), 1);
         assert_eq!(r.state[0].name, "level");
+        assert_eq!(r.state[0].init, Expr::Int(0));
     }
 
     #[test]
     fn parses_role_with_multiple_state_fields() {
-        let r = first_role("role X { ~ traces: int ~ count: int }");
+        let r = first_role("role X { traces = 0  count = 0 }");
         assert_eq!(r.state.len(), 2);
     }
 
     #[test]
-    fn parses_dotted_type_path() {
-        let r = first_role("role X { ~ mem: Memory.Associative }");
+    fn parses_state_field_with_optional_type_annotation() {
+        let r = first_role("role X { mem: Memory.Associative = empty }");
         assert_eq!(
             r.state[0].ty,
-            TypeExpr::Path(vec!["Memory".into(), "Associative".into()])
+            Some(TypeExpr::Path(vec!["Memory".into(), "Associative".into()]))
         );
+    }
+
+    #[test]
+    fn parses_state_field_without_type_annotation() {
+        let r = first_role("role X { level = 0.0 }");
+        assert!(r.state[0].ty.is_none());
+        assert_eq!(r.state[0].init, Expr::Float(0.0));
     }
 
     #[test]
@@ -742,35 +705,11 @@ mod tests {
 
     #[test]
     fn parses_function_type_in_state_field() {
-        let r = first_role("role X { ~ f: Cue -> Trace }");
-        assert!(matches!(r.state[0].ty, TypeExpr::Function { .. }));
-    }
-
-    #[test]
-    fn parses_interface_method() {
-        let r = first_role("role AssociativeMemory { recall: Cue -> Trace }");
-        assert_eq!(r.interface.len(), 1);
-    }
-
-    #[test]
-    fn parses_interface_then_state_in_order() {
-        let src = "role X { recall: Cue -> Trace ~ traces: int }";
-        let r = first_role(src);
-        assert_eq!(r.interface.len(), 1);
-        assert_eq!(r.state.len(), 1);
-    }
-
-    #[test]
-    fn state_marker_before_interface_marker_is_a_parse_error() {
-        // Section markers must appear in canonical order: interface, state,
-        // handlers. Putting `/// _state` before `/// _interface` should fail
-        // because the interface section parser doesn't accept a state marker
-        // and the leftover tokens have nowhere to go.
-        let src = "role X { /// _state
-                            level: int
-                            /// _interface
-                            recall: Cue -> Trace }";
-        assert!(parse(src).is_err());
+        let r = first_role("role X { f: Cue -> Trace = noop }");
+        assert!(matches!(
+            r.state[0].ty,
+            Some(TypeExpr::Function { .. })
+        ));
     }
 
     #[test]
@@ -793,10 +732,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_role_with_all_three_sections() {
-        let src = "role X { recall: Cue -> Trace  ~ level: int  on Tick {} }";
+    fn parses_role_with_state_and_handlers() {
+        let src = "role X { level = 0  on Tick {} }";
         let r = first_role(src);
-        assert_eq!(r.interface.len(), 1);
         assert_eq!(r.state.len(), 1);
         assert_eq!(r.handlers.len(), 1);
     }
@@ -1150,17 +1088,17 @@ mod tests {
 
     #[test]
     fn parses_list_type_in_state() {
-        let r = first_role("role X { ~ episodes: [Episode] }");
+        let r = first_role("role X { episodes: [Episode] = empty }");
         assert_eq!(
             r.state[0].ty,
-            TypeExpr::List(Box::new(TypeExpr::Path(vec!["Episode".into()])))
+            Some(TypeExpr::List(Box::new(TypeExpr::Path(vec!["Episode".into()]))))
         );
     }
 
     #[test]
-    fn parses_function_returning_list() {
-        let r = first_role("role X { recall: Cue -> [Trace] }");
-        if let TypeExpr::Function { to, .. } = &r.interface[0].ty {
+    fn parses_function_type_returning_list_in_state() {
+        let r = first_role("role X { f: Cue -> [Trace] = noop }");
+        if let Some(TypeExpr::Function { to, .. }) = &r.state[0].ty {
             assert!(matches!(**to, TypeExpr::List(_)));
         } else {
             panic!("expected Function type");
@@ -1301,12 +1239,12 @@ mod tests {
         }
     }
 
-    // --- Effect annotations ---
+    // --- Effect annotations on function types in state fields ---
 
     #[test]
     fn function_without_effect_clause_has_empty_effects() {
-        let r = first_role("role X { recall: Cue -> Trace }");
-        if let TypeExpr::Function { effects, .. } = &r.interface[0].ty {
+        let r = first_role("role X { f: Cue -> Trace = noop }");
+        if let Some(TypeExpr::Function { effects, .. }) = &r.state[0].ty {
             assert!(effects.is_empty());
         } else {
             panic!("expected Function");
@@ -1315,8 +1253,8 @@ mod tests {
 
     #[test]
     fn parses_single_effect_annotation() {
-        let r = first_role("role X { fetch: Url -> Response / {io.http} }");
-        if let TypeExpr::Function { effects, .. } = &r.interface[0].ty {
+        let r = first_role("role X { fetch: Url -> Response / {io.http} = noop }");
+        if let Some(TypeExpr::Function { effects, .. }) = &r.state[0].ty {
             assert_eq!(effects, &vec![vec!["io".to_string(), "http".to_string()]]);
         } else {
             panic!("expected Function");
@@ -1325,11 +1263,11 @@ mod tests {
 
     #[test]
     fn parses_multiple_effects() {
-        let r = first_role("role X { tick: Unit -> Unit / {io.sim.clock, io.sim.comms} }");
-        if let TypeExpr::Function { effects, .. } = &r.interface[0].ty {
+        let r = first_role(
+            "role X { tick: Unit -> Unit / {io.sim.clock, io.sim.comms} = noop }",
+        );
+        if let Some(TypeExpr::Function { effects, .. }) = &r.state[0].ty {
             assert_eq!(effects.len(), 2);
-            assert_eq!(effects[0], vec!["io".to_string(), "sim".to_string(), "clock".to_string()]);
-            assert_eq!(effects[1], vec!["io".to_string(), "sim".to_string(), "comms".to_string()]);
         } else {
             panic!("expected Function");
         }
@@ -1337,9 +1275,8 @@ mod tests {
 
     #[test]
     fn parses_empty_effect_set_explicitly() {
-        // `T -> U / {}` is allowed; parses as empty effects (same as omitting `/ {}`).
-        let r = first_role("role X { f: A -> B / {} }");
-        if let TypeExpr::Function { effects, .. } = &r.interface[0].ty {
+        let r = first_role("role X { f: A -> B / {} = noop }");
+        if let Some(TypeExpr::Function { effects, .. }) = &r.state[0].ty {
             assert!(effects.is_empty());
         } else {
             panic!("expected Function");
@@ -1347,23 +1284,13 @@ mod tests {
     }
 
     #[test]
-    fn effect_annotation_works_on_state_field_function_type() {
-        let r = first_role("role X { ~ handler: Event -> Unit / {io.sim.comms} }");
-        if let TypeExpr::Function { effects, .. } = &r.state[0].ty {
-            assert_eq!(effects.len(), 1);
-        } else {
-            panic!("expected Function");
-        }
-    }
-
-    #[test]
     fn parses_nested_list_type() {
-        let r = first_role("role X { ~ matrix: [[int]] }");
+        let r = first_role("role X { matrix: [[int]] = empty }");
         assert_eq!(
             r.state[0].ty,
-            TypeExpr::List(Box::new(TypeExpr::List(Box::new(TypeExpr::Path(vec![
-                "int".into()
-            ])))))
+            Some(TypeExpr::List(Box::new(TypeExpr::List(Box::new(
+                TypeExpr::Path(vec!["int".into()])
+            )))))
         );
     }
 
@@ -1462,7 +1389,6 @@ mod tests {
         let inst = &a.role_instances[0];
         assert_eq!(inst.name, "hunger");
         assert_eq!(inst.io_args, vec!["clock".to_string()]);
-        assert!(inst.wires.is_empty());
     }
 
     #[test]
@@ -1476,38 +1402,6 @@ mod tests {
         );
         let inst = &a.role_instances[0];
         assert_eq!(inst.io_args, vec!["clock".to_string(), "siblings".to_string()]);
-    }
-
-    #[test]
-    fn parses_role_instance_with_wires() {
-        let a = first_actor(
-            "actor mind {
-               clock: io.sim.clock
-               episodicMemory(clock)
-               voice(clock)(episodicMemory -> recall)
-             }",
-        );
-        let voice = &a.role_instances[1];
-        assert_eq!(voice.name, "voice");
-        assert_eq!(voice.wires.len(), 1);
-        assert_eq!(voice.wires[0].source, "episodicMemory");
-        assert_eq!(voice.wires[0].method, "recall");
-    }
-
-    #[test]
-    fn parses_role_instance_with_multiple_wires() {
-        let a = first_actor(
-            "actor mind {
-               clock: io.sim.clock
-               mem(clock)
-               other(clock)
-               voice(clock)(mem -> recall, other -> store)
-             }",
-        );
-        let voice = a.role_instances.last().unwrap();
-        assert_eq!(voice.wires.len(), 2);
-        assert_eq!(voice.wires[0].source, "mem");
-        assert_eq!(voice.wires[1].source, "other");
     }
 
     #[test]
@@ -1561,7 +1455,7 @@ mod tests {
                siblings: io.sim.comms.peer
 
                episodicMemory(clock, siblings)
-               voice(clock)(episodicMemory -> recall)
+               voice(clock)
                hunger(clock)
 
                on clock.tick sequence(hunger -> voice)
@@ -1570,7 +1464,6 @@ mod tests {
         assert_eq!(a.io_spines.len(), 2);
         assert_eq!(a.role_instances.len(), 3);
         assert_eq!(a.dispatch.len(), 1);
-        assert_eq!(a.role_instances[1].wires[0].source, "episodicMemory");
     }
 
     #[test]
@@ -1596,7 +1489,7 @@ mod tests {
     #[test]
     fn module_can_hold_roles_and_actors_together() {
         let m = parse(
-            "role Hunger { ~ level: int }
+            "role Hunger { level = 0 }
              actor mind { clock: io.sim.clock  hunger(clock) }",
         )
         .expect("parse");
@@ -1608,7 +1501,7 @@ mod tests {
     fn parses_canonical_hunger_handler() {
         let body = handler_body(
             "role Hunger {
-               ~ level: int
+               level = 0
 
                on Tick {
                  level = level ~> level + 1

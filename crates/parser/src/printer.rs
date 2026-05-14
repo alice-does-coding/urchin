@@ -55,10 +55,9 @@ fn write_indent(out: &mut String, depth: usize) {
 fn write_role(out: &mut String, r: &RoleDecl) {
     write!(out, "role {} {{", r.name).unwrap();
 
-    let has_interface = !r.interface.is_empty();
     let has_state = !r.state.is_empty();
     let has_handlers = !r.handlers.is_empty();
-    let empty = !has_interface && !has_state && !has_handlers;
+    let empty = !has_state && !has_handlers;
 
     if empty {
         out.push('}');
@@ -67,37 +66,24 @@ fn write_role(out: &mut String, r: &RoleDecl) {
 
     out.push('\n');
 
-    if has_interface {
-        write_indent(out, 1);
-        out.push_str("/// _interface\n");
-        for m in &r.interface {
-            write_indent(out, 1);
-            write!(out, "{}: ", m.name).unwrap();
-            write_type(out, &m.ty);
-            out.push('\n');
-        }
-    }
-
     if has_state {
-        if has_interface {
-            out.push('\n');
-        }
         write_indent(out, 1);
         out.push_str("/// _state\n");
         for f in &r.state {
             write_indent(out, 1);
-            write!(out, "{}: ", f.name).unwrap();
-            write_type(out, &f.ty);
-            if let Some(init) = &f.init {
-                out.push_str(" = ");
-                write_expr(out, init, 1);
+            write!(out, "{}", f.name).unwrap();
+            if let Some(ty) = &f.ty {
+                out.push_str(": ");
+                write_type(out, ty);
             }
+            out.push_str(" = ");
+            write_expr(out, &f.init, 1);
             out.push('\n');
         }
     }
 
     if has_handlers {
-        if has_interface || has_state {
+        if has_state {
             out.push('\n');
         }
         write_indent(out, 1);
@@ -198,16 +184,6 @@ fn write_role_instance(out: &mut String, inst: &RoleInstance, depth: usize) {
         out.push_str(arg);
     }
     out.push(')');
-    if !inst.wires.is_empty() {
-        out.push('(');
-        for (i, w) in inst.wires.iter().enumerate() {
-            if i > 0 {
-                out.push_str(", ");
-            }
-            write!(out, "{} -> {}", w.source, w.method).unwrap();
-        }
-        out.push(')');
-    }
 }
 
 fn write_dispatch_mode(out: &mut String, mode: &DispatchMode) {
@@ -578,14 +554,12 @@ mod tests {
 
     #[test]
     fn round_trips_role_with_state() {
-        round_trip("role Hunger { ~ level: int }");
+        round_trip("role Hunger { level = 0 }");
     }
 
     #[test]
-    fn round_trips_role_with_all_three_sections() {
-        round_trip(
-            "role X { recall: Cue -> Trace ~ traces: int on Cue c { reply 1 } }",
-        );
+    fn round_trips_role_with_state_and_handlers() {
+        round_trip("role X { traces = 0  on Cue c { reply traces } }");
     }
 
     #[test]
@@ -595,7 +569,7 @@ mod tests {
 
     #[test]
     fn round_trips_state_shift_chain() {
-        round_trip("role X { ~ x: int  on T { x = x ~> x + 1 } }");
+        round_trip("role X { x = 0  on T { x = x ~> x + 1 } }");
     }
 
     #[test]
@@ -610,12 +584,14 @@ mod tests {
 
     #[test]
     fn round_trips_lists() {
-        round_trip("role X { ~ xs: [int]  on T { x = [1, 2, 3] } }");
+        round_trip("role X { xs = []  on T { x = [1, 2, 3] } }");
     }
 
     #[test]
-    fn round_trips_function_type_with_effects() {
-        round_trip("role X { recall: Cue -> [Trace] / {io.sim.comms} }");
+    fn round_trips_function_type_with_effects_in_state() {
+        round_trip(
+            "role X { handler: Cue -> [Trace] / {io.sim.comms} = noop }",
+        );
     }
 
     #[test]
@@ -632,7 +608,7 @@ mod tests {
                clock: io.sim.clock
                siblings: io.sim.comms.peer
                episodicMemory(clock, siblings)
-               voice(clock)(episodicMemory -> recall)
+               voice(clock)
                on clock.tick sequence(episodicMemory -> voice)
              }",
         );
@@ -665,7 +641,7 @@ mod tests {
     #[test]
     fn round_trips_module_with_roles_and_actor() {
         round_trip(
-            "role Hunger { ~ level: int }
+            "role Hunger { level = 0 }
              actor mind { clock: io.sim.clock  hunger(clock) }",
         );
     }

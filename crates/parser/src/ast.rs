@@ -34,23 +34,14 @@ pub struct ActorDecl {
     pub dispatch: Vec<DispatchDecl>,
 }
 
-/// `name(io_arg, ...)(source -> method, ...)` — a composed role instance.
-/// First parens lists the IO spines this instance can talk to. Second
-/// parens (optional) wires interface methods this instance needs to
-/// methods provided by sibling instances.
+/// `name(io_arg, ...)` — a composed role instance. Parens lists the IO
+/// spines this instance can talk to. Cross-role coordination happens
+/// through broadcasts and message handlers, not through method-wire
+/// bindings — there are no interface methods to bind anymore.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoleInstance {
     pub name: String,
     pub io_args: Vec<String>,
-    pub wires: Vec<RoleWire>,
-}
-
-/// `source -> method` — a wire from this instance's needed method to
-/// the same-named method on the named source instance.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoleWire {
-    pub source: String,
-    pub method: String,
 }
 
 /// `on spine.event <mode>` — dispatch keys on the spine-qualified event,
@@ -84,32 +75,28 @@ pub struct IoSpine {
     pub io_path: Vec<String>,
 }
 
-/// A role body has up to three sections in order: interface, state, handlers.
-/// Per SPEC.md §3.1 each section is optional and identified by syntactic shape
-/// (interface = bare `name:`, state = `~ name:`, handler = `on Type`).
+/// A role body has two sections: state, handlers. Each section is optional
+/// and identified by its `/// _state` / `/// _handlers` marker (or, for
+/// legacy code, by the leading `~` on state fields and `on` on handlers).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoleDecl {
     pub name: String,
-    pub interface: Vec<InterfaceMethod>,
     pub state: Vec<StateField>,
     pub handlers: Vec<Handler>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InterfaceMethod {
-    pub name: String,
-    pub ty: TypeExpr,
-}
-
+/// State field — `name = init` (canonical) or `name: type = init` (legacy).
+/// Init is required: every state field must declare its initial value, and
+/// the type can be inferred from that value. Type annotation is optional.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StateField {
     pub name: String,
-    pub ty: TypeExpr,
-    /// Optional initializer: `level: float = 0.0`. Used by the runtime
-    /// to seed the field when the role is instantiated. `None` means
-    /// the typechecker will require an explicit init somewhere
-    /// (potentially in a future role-level init block).
-    pub init: Option<Expr>,
+    /// Optional type annotation. When present, the runtime checks the init
+    /// value matches; when absent, the type is inferred from the init.
+    pub ty: Option<TypeExpr>,
+    /// REQUIRED initializer. Default-required-and-inferred is the model;
+    /// no state field can be declared without an init value.
+    pub init: Expr,
 }
 
 /// `on TypePath binding? { stmt* }`
