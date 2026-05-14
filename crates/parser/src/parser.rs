@@ -222,43 +222,10 @@ where
         let expr = expr_parser_with_stmt(stmt.clone());
 
         let name = select! { Token::Ident(n) => n };
-        let segment = select! { Token::Ident(n) => n };
-
         let assign = name
             .then_ignore(just(Token::Equals))
             .then(expr.clone())
             .map(|(name, value)| Stmt::Assign { name, value });
-
-        let reply = just(Token::KwReply)
-            .ignore_then(expr.clone())
-            .map(Stmt::Reply);
-
-        let type_path = segment
-            .clone()
-            .separated_by(just(Token::Dot))
-            .at_least(1)
-            .collect::<Vec<_>>();
-
-        let args = expr
-            .clone()
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LParen), just(Token::RParen))
-            .or_not()
-            .map(Option::unwrap_or_default);
-
-        let broadcast = just(Token::KwBroadcast)
-            .ignore_then(type_path)
-            .then(args)
-            .map_with(|(message_type, args), e| {
-                let s: Span = e.span();
-                Stmt::Broadcast {
-                    message_type,
-                    args,
-                    span: s.start..s.end,
-                }
-            });
 
         let block = stmt
             .clone()
@@ -278,7 +245,7 @@ where
 
         let expr_stmt = expr.map(Stmt::ExprStmt);
 
-        choice((if_stmt, broadcast, reply, assign, expr_stmt))
+        choice((if_stmt, assign, expr_stmt))
     })
 }
 
@@ -928,13 +895,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_reply_statement() {
-        let body = handler_body("role X { /// _handlers on Cue c { reply level } }");
-        assert_eq!(body.len(), 1);
-        assert!(matches!(body[0], Stmt::Reply(_)));
-    }
-
-    #[test]
     fn parses_assign_statement() {
         let body = handler_body("role X { /// _handlers on Tick { x = 1 } }");
         match &body[0] {
@@ -949,12 +909,12 @@ mod tests {
     #[test]
     fn parses_multi_statement_handler_body() {
         let body = handler_body(
-            "role X { /// _handlers on Tick { x = 1 y = 2 reply x } }",
+            "role X { /// _handlers on Tick { x = 1  y = 2  x } }",
         );
         assert_eq!(body.len(), 3);
         assert!(matches!(body[0], Stmt::Assign { .. }));
         assert!(matches!(body[1], Stmt::Assign { .. }));
-        assert!(matches!(body[2], Stmt::Reply(_)));
+        assert!(matches!(body[2], Stmt::ExprStmt(_)));
     }
 
     #[test]
@@ -1010,7 +970,7 @@ mod tests {
 
     #[test]
     fn parses_if_without_else() {
-        let body = handler_body("role X { /// _handlers on Tick { if level > 7 { reply level } } }");
+        let body = handler_body("role X { /// _handlers on Tick { if level > 7 { x = level } } }");
         match &body[0] {
             Stmt::If { else_body, then_body, .. } => {
                 assert!(else_body.is_none());
@@ -1023,7 +983,7 @@ mod tests {
     #[test]
     fn parses_if_else() {
         let body = handler_body(
-            "role X { /// _handlers on Tick { if level > 7 { reply 1 } else { reply 0 } } }",
+            "role X { /// _handlers on Tick { if level > 7 { x = 1 } else { x = 0 } } }",
         );
         match &body[0] {
             Stmt::If { else_body: Some(eb), .. } => {
@@ -1036,50 +996,12 @@ mod tests {
     #[test]
     fn parses_nested_if() {
         let body = handler_body(
-            "role X { /// _handlers on Tick { if level > 7 { if level > 10 { reply 1 } } } }",
+            "role X { /// _handlers on Tick { if level > 7 { if level > 10 { x = 1 } } } }",
         );
         if let Stmt::If { then_body, .. } = &body[0] {
             assert!(matches!(then_body[0], Stmt::If { .. }));
         } else {
             panic!("expected outer If");
-        }
-    }
-
-    // --- Broadcast ---
-
-    #[test]
-    fn parses_broadcast_no_args() {
-        let body = handler_body("role X { /// _handlers on Tick { broadcast Wants } }");
-        match &body[0] {
-            Stmt::Broadcast { message_type, args, .. } => {
-                assert_eq!(message_type, &vec!["Wants".to_string()]);
-                assert!(args.is_empty());
-            }
-            other => panic!("expected Broadcast, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parses_broadcast_with_args() {
-        let body = handler_body("role X { /// _handlers on Tick { broadcast Found(1) } }");
-        match &body[0] {
-            Stmt::Broadcast { message_type, args, .. } => {
-                assert_eq!(message_type, &vec!["Found".to_string()]);
-                assert_eq!(args.len(), 1);
-                assert_eq!(args[0], Expr::Int(1));
-            }
-            other => panic!("expected Broadcast, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parses_broadcast_with_dotted_message_type() {
-        let body = handler_body("role X { /// _handlers on Tick { broadcast io.sim.Wakeup } }");
-        match &body[0] {
-            Stmt::Broadcast { message_type, .. } => {
-                assert_eq!(message_type, &vec!["io".to_string(), "sim".to_string(), "Wakeup".to_string()]);
-            }
-            other => panic!("expected Broadcast, got {other:?}"),
         }
     }
 
@@ -1156,12 +1078,12 @@ mod tests {
     #[test]
     fn parses_block_bodied_arm() {
         let body = handler_body(
-            "role X { /// _handlers on S s { match s { Threat -> { broadcast Retreat reply 1 } _ -> 0 } } }",
+            "role X { /// _handlers on S s { match s { Threat -> { x = 1  y = 2 } _ -> 0 } } }",
         );
         if let Stmt::ExprStmt(Expr::Match { arms, .. }) = &body[0] {
             assert_eq!(arms[0].body.len(), 2);
-            assert!(matches!(arms[0].body[0], Stmt::Broadcast { .. }));
-            assert!(matches!(arms[0].body[1], Stmt::Reply(_)));
+            assert!(matches!(arms[0].body[0], Stmt::Assign { .. }));
+            assert!(matches!(arms[0].body[1], Stmt::Assign { .. }));
             // Wildcard arm has bare-expr body wrapped to one ExprStmt.
             assert_eq!(arms[1].body.len(), 1);
             assert!(matches!(arms[1].body[0], Stmt::ExprStmt(_)));
@@ -1532,7 +1454,7 @@ mod tests {
                on Tick {
                  level = level ~> level + 1
                  if level > 7 {
-                   broadcast Wants
+                   wants = level
                  }
                }
              }",
@@ -1541,9 +1463,9 @@ mod tests {
         assert!(matches!(body[0], Stmt::Assign { .. }));
         match &body[1] {
             Stmt::If { then_body, .. } => {
-                assert!(matches!(then_body[0], Stmt::Broadcast { .. }));
+                assert!(matches!(then_body[0], Stmt::Assign { .. }));
             }
-            other => panic!("expected If with Broadcast inside, got {other:?}"),
+            other => panic!("expected If with Assign inside, got {other:?}"),
         }
     }
 }

@@ -26,14 +26,10 @@ pub enum Token {
     KwAsync,
     /// `on` — handler header (in roles) and dispatch decl (in actors)
     KwOn,
-    /// `reply` — reply statement
-    KwReply,
     /// `if`
     KwIf,
     /// `else`
     KwElse,
-    /// `broadcast`
-    KwBroadcast,
     /// `match`
     KwMatch,
     /// PascalCase or snake_case identifier.
@@ -115,10 +111,8 @@ impl fmt::Display for Token {
             Token::KwParallel => "parallel",
             Token::KwSequence => "sequence",
             Token::KwAsync => "async",
-            Token::KwReply => "reply",
             Token::KwIf => "if",
             Token::KwElse => "else",
-            Token::KwBroadcast => "broadcast",
             Token::KwMatch => "match",
             Token::Ident(name) => return write!(f, "{name}"),
             Token::IntLit(n) => return write!(f, "{n}"),
@@ -173,10 +167,8 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
         "parallel" => Token::KwParallel,
         "sequence" => Token::KwSequence,
         "async" => Token::KwAsync,
-        "reply" => Token::KwReply,
         "if" => Token::KwIf,
         "else" => Token::KwElse,
-        "broadcast" => Token::KwBroadcast,
         "match" => Token::KwMatch,
         other => Token::Ident(other.to_string()),
     });
@@ -395,11 +387,6 @@ mod tests {
     }
 
     #[test]
-    fn lexes_reply_keyword() {
-        assert_eq!(toks("reply"), vec![Token::KwReply]);
-    }
-
-    #[test]
     fn lexes_state_mutation_statement() {
         assert_eq!(
             toks("level = level ~> level + 1"),
@@ -446,28 +433,6 @@ mod tests {
     #[test]
     fn lexes_if_else_keywords() {
         assert_eq!(toks("if else"), vec![Token::KwIf, Token::KwElse]);
-    }
-
-    #[test]
-    fn lexes_broadcast_keyword() {
-        assert_eq!(toks("broadcast"), vec![Token::KwBroadcast]);
-    }
-
-    #[test]
-    fn lexes_conditional_with_broadcast() {
-        assert_eq!(
-            toks("if level > 7 { broadcast Wants }"),
-            vec![
-                Token::KwIf,
-                Token::Ident("level".into()),
-                Token::Gt,
-                Token::IntLit(7),
-                Token::LBrace,
-                Token::KwBroadcast,
-                Token::Ident("Wants".into()),
-                Token::RBrace,
-            ]
-        );
     }
 
     #[test]

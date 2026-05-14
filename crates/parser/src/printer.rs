@@ -226,24 +226,6 @@ fn write_stmt(out: &mut String, s: &Stmt, depth: usize) {
             write!(out, "{} = ", name).unwrap();
             write_expr(out, value, depth);
         }
-        Stmt::Reply(e) => {
-            out.push_str("reply ");
-            write_expr(out, e, depth);
-        }
-        Stmt::Broadcast { message_type, args, .. } => {
-            out.push_str("broadcast ");
-            write_dotted(out, message_type);
-            if !args.is_empty() {
-                out.push('(');
-                for (i, a) in args.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    write_expr(out, a, depth);
-                }
-                out.push(')');
-            }
-        }
         Stmt::If { cond, then_body, else_body } => {
             out.push_str("if ");
             write_expr(out, cond, depth);
@@ -597,7 +579,7 @@ mod tests {
     #[test]
     fn round_trips_match() {
         round_trip(
-            "role X { /// _handlers on S s { match s { Threat -> broadcast Retreat _ -> {} } } }",
+            "role X { /// _handlers on S s { match s { Threat -> { x = 1 } _ -> {} } } }",
         );
     }
 

@@ -113,24 +113,14 @@ pub enum Stmt {
     /// `name = expr` — a local binding if `expr` has no `~>`, a state
     /// mutation if it does. Distinction left to the typechecker.
     Assign { name: String, value: Expr },
-    /// `reply expr`
-    Reply(Expr),
-    /// `broadcast TypePath` or `broadcast TypePath(args)` — emit a message
-    /// onto the actor's bus. `span` is the source range covering the whole
-    /// `broadcast …` statement, used by the typechecker for diagnostics
-    /// (e.g. composition-completeness errors point at the offending broadcast).
-    Broadcast {
-        message_type: Vec<String>,
-        args: Vec<Expr>,
-        span: std::ops::Range<usize>,
-    },
     /// `if cond { then_body } else { else_body }`. Else is optional.
     If {
         cond: Expr,
         then_body: Vec<Stmt>,
         else_body: Option<Vec<Stmt>>,
     },
-    /// A bare expression statement.
+    /// A bare expression statement. Becomes the implicit return value
+    /// when in tail position of a handler body.
     ExprStmt(Expr),
 }
 
