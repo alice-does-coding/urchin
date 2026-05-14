@@ -4,11 +4,56 @@
 /// messages need them. The shape here mirrors SPEC.md §3.
 
 /// A `Module` holds the top-level declarations from one source file.
-/// Roles and actors can appear in any order.
+/// Roles, actors, and io declarations can appear in any order.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Module {
     pub roles: Vec<RoleDecl>,
     pub actors: Vec<ActorDecl>,
+    pub io_decls: Vec<IoDecl>,
+}
+
+/// `io <name> { _interface ... _api_contracts ... _connection_handlers ... }`
+///
+/// Declares an io module — the typed contract between actors and an
+/// underlying API/SDK/network thing. Pure declarative; the runtime
+/// synthesizes the implementation from interface + api_contracts +
+/// connection config.
+///
+/// Three sections, parallel to actor/role section taxonomy:
+///   - `_interface`           — what actors see (event/method entries)
+///   - `_api_contracts`       — wire-format record types (internal)
+///   - `_connection_handlers` — config values for the connection
+#[derive(Debug, Clone, PartialEq)]
+pub struct IoDecl {
+    pub name: String,
+    pub interface: Vec<IoInterfaceEntry>,
+    pub api_contracts: Vec<TypeAlias>,
+    pub connection_handlers: Vec<ConnectionHandler>,
+}
+
+/// One entry in an io's `_interface` section.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IoInterfaceEntry {
+    /// `event name: ResultType` — the io produces this; actors handle via `on`.
+    Event { name: String, ty: TypeExpr },
+    /// `method name: ArgType -> ResultType` — actors call this.
+    Method { name: String, ty: TypeExpr },
+}
+
+/// `name: TypeExpr` in `_api_contracts` — declares `name` as an alias
+/// for `TypeExpr` (typically a record type). Internal to the io module.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeAlias {
+    pub name: String,
+    pub ty: TypeExpr,
+}
+
+/// `name = init` in `_connection_handlers` — config value the runtime
+/// uses to set up the underlying connection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConnectionHandler {
+    pub name: String,
+    pub init: Expr,
 }
 
 /// An actor declaration. Body has three sections in canonical order:
@@ -219,4 +264,13 @@ pub enum TypeExpr {
     },
     /// `[T]` — homogeneous list type.
     List(Box<TypeExpr>),
+    /// `{name: type, ...}` — record type with named fields.
+    Record(Vec<RecordField>),
+}
+
+/// One field in a record type: `name: TypeExpr`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordField {
+    pub name: String,
+    pub ty: TypeExpr,
 }

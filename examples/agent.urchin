@@ -17,6 +17,14 @@
 /// broadcasts and message handlers; cross-IO interfaces (the protocol
 /// each io.* module enforces) are a separate concern at the IO layer.
 
+io clock {
+  /// _interface
+  event tick: timestamp
+
+  /// _connection_handlers
+  rate = 60
+}
+
 role photographer {
   /// _state
   shotsTaken = 0

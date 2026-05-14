@@ -32,6 +32,10 @@ pub enum Token {
     KwElse,
     /// `match`
     KwMatch,
+    /// `event` — interface entry the io produces (actors handle via `on`)
+    KwEvent,
+    /// `method` — interface entry actors call (synchronous from actor's view)
+    KwMethod,
     /// PascalCase or snake_case identifier.
     Ident(String),
     /// Integer literal.
@@ -114,6 +118,8 @@ impl fmt::Display for Token {
             Token::KwIf => "if",
             Token::KwElse => "else",
             Token::KwMatch => "match",
+            Token::KwEvent => "event",
+            Token::KwMethod => "method",
             Token::Ident(name) => return write!(f, "{name}"),
             Token::IntLit(n) => return write!(f, "{n}"),
             Token::FloatLit(n) => return write!(f, "{n}"),
@@ -170,6 +176,8 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
         "if" => Token::KwIf,
         "else" => Token::KwElse,
         "match" => Token::KwMatch,
+        "event" => Token::KwEvent,
+        "method" => Token::KwMethod,
         other => Token::Ident(other.to_string()),
     });
 
@@ -590,5 +598,21 @@ mod tests {
                 Token::RBrace,
             ]
         );
+    }
+
+    #[test]
+    fn lexes_event_and_method_keywords() {
+        // io interface-entry keywords — distinct from Ident so the io
+        // decl parser can pattern-match them directly.
+        assert_eq!(toks("event"), vec![Token::KwEvent]);
+        assert_eq!(toks("method"), vec![Token::KwMethod]);
+    }
+
+    #[test]
+    fn io_remains_an_ident_not_a_keyword() {
+        // `io.sim.clock` paths depend on `io` staying an ident — the io
+        // decl form is matched by ident-equality in the parser, not by
+        // a reserved token.
+        assert_eq!(toks("io"), vec![Token::Ident("io".into())]);
     }
 }

@@ -12,13 +12,18 @@
 use std::fmt::Write;
 
 use crate::ast::{
-    ActorDecl, BinOp, CallArg, DispatchMode, Expr, Handler, Module, Pattern, RoleDecl,
-    RoleInstance, Stmt, TypeExpr,
+    ActorDecl, BinOp, CallArg, DispatchMode, Expr, Handler, IoDecl, IoInterfaceEntry, Module,
+    Pattern, RoleDecl, RoleInstance, Stmt, TypeExpr,
 };
 
 const INDENT: &str = "  ";
 
 /// Format a whole module as Urchin source.
+///
+/// Output order follows the file-flow convention (small-to-large): roles
+/// first (atomic primitives), then io decls (library-shaped contracts),
+/// then actors (orchestration). Within each group, declarations keep their
+/// source order.
 pub fn format(module: &Module) -> String {
     let mut out = String::new();
     let mut first = true;
@@ -29,6 +34,13 @@ pub fn format(module: &Module) -> String {
         }
         first = false;
         write_role(&mut out, role);
+    }
+    for io in &module.io_decls {
+        if !first {
+            out.push_str("\n\n");
+        }
+        first = false;
+        write_io_decl(&mut out, io);
     }
     for actor in &module.actors {
         if !first {
@@ -205,6 +217,73 @@ fn write_dispatch_mode(out: &mut String, mode: &DispatchMode) {
             out.push(')');
         }
     }
+}
+
+// --- IO declarations ----------------------------------------------------
+
+fn write_io_decl(out: &mut String, io: &IoDecl) {
+    write!(out, "io {} {{", io.name).unwrap();
+
+    let has_interface = !io.interface.is_empty();
+    let has_contracts = !io.api_contracts.is_empty();
+    let has_handlers = !io.connection_handlers.is_empty();
+    let empty = !has_interface && !has_contracts && !has_handlers;
+
+    if empty {
+        out.push('}');
+        return;
+    }
+
+    out.push('\n');
+
+    if has_interface {
+        write_indent(out, 1);
+        out.push_str("/// _interface\n");
+        for entry in &io.interface {
+            write_indent(out, 1);
+            match entry {
+                IoInterfaceEntry::Event { name, ty } => {
+                    write!(out, "event {name}: ").unwrap();
+                    write_type(out, ty);
+                }
+                IoInterfaceEntry::Method { name, ty } => {
+                    write!(out, "method {name}: ").unwrap();
+                    write_type(out, ty);
+                }
+            }
+            out.push('\n');
+        }
+    }
+
+    if has_contracts {
+        if has_interface {
+            out.push('\n');
+        }
+        write_indent(out, 1);
+        out.push_str("/// _api_contracts\n");
+        for alias in &io.api_contracts {
+            write_indent(out, 1);
+            write!(out, "{}: ", alias.name).unwrap();
+            write_type(out, &alias.ty);
+            out.push('\n');
+        }
+    }
+
+    if has_handlers {
+        if has_interface || has_contracts {
+            out.push('\n');
+        }
+        write_indent(out, 1);
+        out.push_str("/// _connection_handlers\n");
+        for h in &io.connection_handlers {
+            write_indent(out, 1);
+            write!(out, "{} = ", h.name).unwrap();
+            write_expr(out, &h.init, 1);
+            out.push('\n');
+        }
+    }
+
+    out.push('}');
 }
 
 // --- Statements & expressions ------------------------------------------
@@ -435,6 +514,17 @@ fn write_type(out: &mut String, t: &TypeExpr) {
                 }
                 out.push('}');
             }
+        }
+        TypeExpr::Record(fields) => {
+            out.push('{');
+            for (i, f) in fields.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                write!(out, "{}: ", f.name).unwrap();
+                write_type(out, &f.ty);
+            }
+            out.push('}');
         }
     }
 }
@@ -692,5 +782,77 @@ mod tests {
     #[test]
     fn pipe_wrap_is_idempotent() {
         idempotent("role X { /// _handlers on T { x = a |> b() |> c() |> d() } }");
+    }
+
+    // --- IO declarations ---
+
+    #[test]
+    fn round_trips_empty_io_decl() {
+        round_trip("io clock {}");
+    }
+
+    #[test]
+    fn round_trips_io_decl_interface_only() {
+        round_trip(
+            "io clock { /// _interface event tick: timestamp  method now: unit -> timestamp }",
+        );
+    }
+
+    #[test]
+    fn round_trips_io_decl_api_contracts() {
+        round_trip(
+            "io anthropic { /// _api_contracts request: {model: string, prompt: string} }",
+        );
+    }
+
+    #[test]
+    fn round_trips_io_decl_connection_handlers() {
+        round_trip("io clock { /// _connection_handlers rate = 60  offset = 0 }");
+    }
+
+    #[test]
+    fn round_trips_full_io_decl() {
+        round_trip(
+            "io anthropic {
+               /// _interface
+               method ask: string -> response
+
+               /// _api_contracts
+               response: {text: string, tokens: int}
+
+               /// _connection_handlers
+               endpoint = \"https://api.anthropic.com\"
+               retries = 3
+             }",
+        );
+    }
+
+    #[test]
+    fn round_trips_module_with_role_io_and_actor() {
+        round_trip(
+            "role Hunger { /// _state level = 0 }
+             io clock { /// _interface event tick: timestamp }
+             actor mind { /// _io c: io.sim.clock  /// _roles hunger(c) }",
+        );
+    }
+
+    #[test]
+    fn module_order_is_roles_then_io_then_actors() {
+        // Mixed declaration order in source — canonical output puts roles
+        // first, io decls next, actors last (small-to-large).
+        let src = "actor mind {}
+                   io clock {}
+                   role X {}";
+        let m = parse(src).unwrap();
+        let f = format(&m);
+        let role_pos = f.find("role X").expect("role missing");
+        let io_pos = f.find("io clock").expect("io missing");
+        let actor_pos = f.find("actor mind").expect("actor missing");
+        assert!(role_pos < io_pos && io_pos < actor_pos, "got:\n{f}");
+    }
+
+    #[test]
+    fn round_trips_record_type_in_state() {
+        round_trip("role X { /// _state shape: {x: int, y: int} = empty }");
     }
 }

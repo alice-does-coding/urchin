@@ -8,8 +8,9 @@ use chumsky::input::{Input, ValueInput};
 use chumsky::prelude::*;
 
 use crate::ast::{
-    ActorDecl, BinOp, CallArg, DispatchDecl, DispatchMode, Expr, Handler, IoSpine, MatchArm,
-    Module, Pattern, RoleDecl, RoleInstance, SpineEvent, StateField, Stmt, TypeExpr,
+    ActorDecl, BinOp, CallArg, ConnectionHandler, DispatchDecl, DispatchMode, Expr, Handler,
+    IoDecl, IoInterfaceEntry, IoSpine, MatchArm, Module, Pattern, RecordField, RoleDecl,
+    RoleInstance, SpineEvent, StateField, Stmt, TypeAlias, TypeExpr,
 };
 use crate::lexer::{lex, Span, Token};
 use crate::ParseError;
@@ -40,9 +41,9 @@ pub fn parse(source: &str) -> Result<Module, Vec<ParseError>> {
     })
 }
 
-/// `Module` ::= (RoleDecl | ActorDecl)*
+/// `Module` ::= (RoleDecl | IoDecl | ActorDecl)*
 ///
-/// Top-level declarations in any order. Either kind sorts into its own
+/// Top-level declarations in any order. Each kind sorts into its own
 /// vector on the `Module`.
 fn module_parser<'src, I>(
 ) -> impl Parser<'src, I, Module, extra::Err<Rich<'src, Token, Span>>>
@@ -52,9 +53,14 @@ where
     enum TopLevel {
         Role(RoleDecl),
         Actor(ActorDecl),
+        Io(IoDecl),
     }
 
+    // `io` is not a reserved keyword (the `io.sim.clock` path syntax depends
+    // on it staying an Ident). Try the io-decl branch before role/actor so
+    // the leading `io` ident is recognized as the keyword position.
     let item = choice((
+        io_decl_parser().map(TopLevel::Io),
         role_decl_parser().map(TopLevel::Role),
         actor_decl_parser().map(TopLevel::Actor),
     ));
@@ -65,6 +71,7 @@ where
             match item {
                 TopLevel::Role(r) => module.roles.push(r),
                 TopLevel::Actor(a) => module.actors.push(a),
+                TopLevel::Io(io) => module.io_decls.push(io),
             }
         }
         module
@@ -547,6 +554,86 @@ where
         })
 }
 
+/// `IoDecl` ::= `io` Ident `{`
+///                ( `/// _interface`           InterfaceEntry* )?
+///                ( `/// _api_contracts`       TypeAlias*      )?
+///                ( `/// _connection_handlers` ConnectionHandler* )?
+///              `}`
+///
+/// `io` isn't a reserved keyword — the `io.sim.clock` path syntax in actor
+/// IO spines depends on it being a plain ident. We detect the declaration
+/// form by matching the ident literally.
+///
+/// Pure declarative: no `_impl` section. The runtime synthesizes the
+/// implementation from interface + api_contracts + connection_handlers.
+/// `event` and `method` keywords distinguish the two interface-entry kinds.
+fn io_decl_parser<'src, I>(
+) -> impl Parser<'src, I, IoDecl, extra::Err<Rich<'src, Token, Span>>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    let io_kw = select! { Token::Ident(n) if n == "io" => () };
+    let name = select! { Token::Ident(n) => n };
+
+    // Interface entry: `event name : TypeExpr` or `method name : TypeExpr`.
+    let entry_name = select! { Token::Ident(n) => n };
+    let event_entry = just(Token::KwEvent)
+        .ignore_then(entry_name)
+        .then_ignore(just(Token::Colon))
+        .then(type_expr_parser())
+        .map(|(name, ty)| IoInterfaceEntry::Event { name, ty });
+    let method_entry = just(Token::KwMethod)
+        .ignore_then(entry_name)
+        .then_ignore(just(Token::Colon))
+        .then(type_expr_parser())
+        .map(|(name, ty)| IoInterfaceEntry::Method { name, ty });
+    let interface_entry = choice((event_entry, method_entry));
+
+    // API contract alias: `name : TypeExpr` (typically a record).
+    let alias_name = select! { Token::Ident(n) => n };
+    let type_alias = alias_name
+        .then_ignore(just(Token::Colon))
+        .then(type_expr_parser())
+        .map(|(name, ty)| TypeAlias { name, ty });
+
+    // Connection handler: `name = init` — same shape as a state init.
+    let handler_name = select! { Token::Ident(n) => n };
+    let connection_handler = handler_name
+        .then_ignore(just(Token::Equals))
+        .then(state_init_parser())
+        .map(|(name, init)| ConnectionHandler { name, init });
+
+    // Sections — markers REQUIRED when the section has content (same rule
+    // as roles and actors). Absent marker = absent section.
+    let interface_section = section_marker("interface")
+        .ignore_then(interface_entry.repeated().collect::<Vec<_>>())
+        .or_not()
+        .map(Option::unwrap_or_default);
+    let contracts_section = section_marker("api_contracts")
+        .ignore_then(type_alias.repeated().collect::<Vec<_>>())
+        .or_not()
+        .map(Option::unwrap_or_default);
+    let connection_section = section_marker("connection_handlers")
+        .ignore_then(connection_handler.repeated().collect::<Vec<_>>())
+        .or_not()
+        .map(Option::unwrap_or_default);
+
+    let body = interface_section
+        .then(contracts_section)
+        .then(connection_section)
+        .delimited_by(just(Token::LBrace), just(Token::RBrace));
+
+    io_kw
+        .ignore_then(name)
+        .then(body)
+        .map(|(name, ((interface, api_contracts), connection_handlers))| IoDecl {
+            name,
+            interface,
+            api_contracts,
+            connection_handlers,
+        })
+}
+
 /// `TypeExpr` ::= TypeAtom (`->` TypeExpr EffectSet?)?     // right-assoc
 /// `TypeAtom` ::= `[` TypeExpr `]`
 ///              | Ident (`.` Ident)*
@@ -571,7 +658,21 @@ where
             .delimited_by(just(Token::LBracket), just(Token::RBracket))
             .map(|inner| TypeExpr::List(Box::new(inner)));
 
-        let atom = choice((list, path));
+        // `{ name : type, ... }` — record type with named fields. Empty
+        // record `{}` is allowed; trailing comma is allowed.
+        let field_name = select! { Token::Ident(n) => n };
+        let record_field = field_name
+            .then_ignore(just(Token::Colon))
+            .then(type_expr.clone())
+            .map(|(name, ty)| RecordField { name, ty });
+        let record = record_field
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .map(TypeExpr::Record);
+
+        let atom = choice((list, record, path));
 
         // Optional effect set following an arrow's RHS.
         let effect_set = just(Token::Slash)
@@ -1523,5 +1624,192 @@ mod tests {
             }
             other => panic!("expected If with Assign inside, got {other:?}"),
         }
+    }
+
+    // --- Record type expressions ---
+
+    #[test]
+    fn parses_empty_record_type() {
+        // `{}` as a type — a record with no fields. Mostly useful as a
+        // building block; the contract reads `nothing in, nothing out`.
+        let r = first_role("role X { /// _state shape: {} = empty }");
+        assert_eq!(r.state[0].ty, Some(TypeExpr::Record(vec![])));
+    }
+
+    #[test]
+    fn parses_record_type_with_one_field() {
+        let r = first_role("role X { /// _state shape: {x: int} = empty }");
+        if let Some(TypeExpr::Record(fields)) = &r.state[0].ty {
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].name, "x");
+            assert_eq!(fields[0].ty, TypeExpr::Path(vec!["int".into()]));
+        } else {
+            panic!("expected Record type, got {:?}", r.state[0].ty);
+        }
+    }
+
+    #[test]
+    fn parses_record_type_with_multiple_fields() {
+        let r = first_role("role X { /// _state shape: {x: int, y: int, label: string} = empty }");
+        if let Some(TypeExpr::Record(fields)) = &r.state[0].ty {
+            assert_eq!(fields.len(), 3);
+            assert_eq!(fields[2].name, "label");
+        } else {
+            panic!("expected Record type");
+        }
+    }
+
+    #[test]
+    fn parses_nested_record_type() {
+        let r = first_role(
+            "role X { /// _state shape: {inner: {x: int}} = empty }",
+        );
+        if let Some(TypeExpr::Record(fields)) = &r.state[0].ty {
+            assert!(matches!(fields[0].ty, TypeExpr::Record(_)));
+        } else {
+            panic!("expected outer Record");
+        }
+    }
+
+    // --- IO declarations ---
+
+    fn first_io(src: &str) -> IoDecl {
+        let m = parse(src).expect("parse");
+        m.io_decls.into_iter().next().expect("io decl")
+    }
+
+    #[test]
+    fn parses_empty_io_decl() {
+        let io = first_io("io clock {}");
+        assert_eq!(io.name, "clock");
+        assert!(io.interface.is_empty());
+        assert!(io.api_contracts.is_empty());
+        assert!(io.connection_handlers.is_empty());
+    }
+
+    #[test]
+    fn parses_io_decl_with_one_event() {
+        let io = first_io(
+            "io clock {
+               /// _interface
+               event tick: timestamp
+             }",
+        );
+        assert_eq!(io.interface.len(), 1);
+        match &io.interface[0] {
+            IoInterfaceEntry::Event { name, ty } => {
+                assert_eq!(name, "tick");
+                assert_eq!(ty, &TypeExpr::Path(vec!["timestamp".into()]));
+            }
+            other => panic!("expected Event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_io_decl_with_event_and_method() {
+        let io = first_io(
+            "io chat {
+               /// _interface
+               event message: string
+               method send: string -> ack
+             }",
+        );
+        assert_eq!(io.interface.len(), 2);
+        assert!(matches!(io.interface[0], IoInterfaceEntry::Event { .. }));
+        match &io.interface[1] {
+            IoInterfaceEntry::Method { name, ty } => {
+                assert_eq!(name, "send");
+                assert!(matches!(ty, TypeExpr::Function { .. }));
+            }
+            other => panic!("expected Method, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_io_decl_with_api_contracts() {
+        let io = first_io(
+            "io anthropic {
+               /// _api_contracts
+               request: {model: string, prompt: string}
+               response: {text: string}
+             }",
+        );
+        assert_eq!(io.api_contracts.len(), 2);
+        assert_eq!(io.api_contracts[0].name, "request");
+        assert!(matches!(io.api_contracts[0].ty, TypeExpr::Record(_)));
+    }
+
+    #[test]
+    fn parses_io_decl_with_connection_handlers() {
+        let io = first_io(
+            "io clock {
+               /// _connection_handlers
+               rate = 60
+               offset = 0
+             }",
+        );
+        assert_eq!(io.connection_handlers.len(), 2);
+        assert_eq!(io.connection_handlers[0].name, "rate");
+        assert_eq!(io.connection_handlers[0].init, Expr::Int(60));
+    }
+
+    #[test]
+    fn parses_full_three_section_io_decl() {
+        let io = first_io(
+            "io anthropic {
+               /// _interface
+               method ask: string -> response
+
+               /// _api_contracts
+               response: {text: string, tokens: int}
+
+               /// _connection_handlers
+               endpoint = \"https://api.anthropic.com\"
+               retries = 3
+             }",
+        );
+        assert_eq!(io.interface.len(), 1);
+        assert_eq!(io.api_contracts.len(), 1);
+        assert_eq!(io.connection_handlers.len(), 2);
+    }
+
+    #[test]
+    fn parses_module_with_role_io_and_actor() {
+        // The full small-to-large file flow with all three top-level forms.
+        let m = parse(
+            "role Hunger { /// _state level = 0 }
+             io clock { /// _interface event tick: timestamp }
+             actor mind { /// _io c: io.sim.clock  /// _roles hunger(c) }",
+        )
+        .expect("parse");
+        assert_eq!(m.roles.len(), 1);
+        assert_eq!(m.io_decls.len(), 1);
+        assert_eq!(m.actors.len(), 1);
+    }
+
+    #[test]
+    fn io_section_order_is_strict() {
+        // contracts before interface should fail — sections must appear
+        // in canonical order (interface, api_contracts, connection_handlers).
+        let src = "io clock {
+                     /// _api_contracts
+                     foo: int
+                     /// _interface
+                     event tick: timestamp
+                   }";
+        assert!(parse(src).is_err());
+    }
+
+    #[test]
+    fn io_decl_does_not_shadow_io_spine_path() {
+        // The presence of an io decl must not interfere with `io.x.y` paths
+        // inside actor spines (the `io` ident is reused there).
+        let m = parse(
+            "io clock { /// _interface event tick: timestamp }
+             actor mind { /// _io c: io.sim.clock }",
+        )
+        .expect("parse");
+        assert_eq!(m.io_decls.len(), 1);
+        assert_eq!(m.actors[0].io_spines[0].io_path, vec!["io", "sim", "clock"]);
     }
 }
