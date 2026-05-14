@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/parser",
     "crates/types",
+    "crates/runtime",
     "crates/cli",
 ]
 

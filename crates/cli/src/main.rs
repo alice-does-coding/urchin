@@ -34,6 +34,15 @@ enum Cmd {
         /// Path to the source file.
         file: PathBuf,
     },
+    /// Parse, check, and run a `.urchin` file under the sim clock. Emits
+    /// one JSON event per line to stdout.
+    Run {
+        /// Path to the source file.
+        file: PathBuf,
+        /// Number of sim-clock ticks to run.
+        #[arg(long, default_value_t = 10)]
+        ticks: u64,
+    },
 }
 
 fn main() -> ExitCode {
@@ -42,6 +51,7 @@ fn main() -> ExitCode {
         Cmd::Parse { file } => run_parse(&file),
         Cmd::Format { file } => run_format(&file),
         Cmd::Check { file } => run_check(&file),
+        Cmd::Run { file, ticks } => run_run(&file, ticks),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -120,6 +130,38 @@ fn run_check(file: &Path) -> Result<(), ExitCode> {
             Err(ExitCode::from(1))
         }
     }
+}
+
+fn run_run(file: &Path, ticks: u64) -> Result<(), ExitCode> {
+    let source = std::fs::read_to_string(file).map_err(|e| {
+        eprintln!("urchin: cannot read {}: {e}", file.display());
+        ExitCode::from(2)
+    })?;
+    let source_id = file.display().to_string();
+
+    let module = match urchin_parser::parse(&source) {
+        Ok(m) => m,
+        Err(errors) => {
+            for err in errors {
+                render_error(&source_id, &source, &err);
+            }
+            return Err(ExitCode::from(1));
+        }
+    };
+
+    if let Err(errors) = urchin_types::check(&module) {
+        for err in errors {
+            render_check_error(&source_id, &source, &err);
+        }
+        return Err(ExitCode::from(1));
+    }
+
+    let mut sink = urchin_runtime::events::StdoutSink;
+    if let Err(msg) = urchin_runtime::run(&module, ticks, &mut sink) {
+        eprintln!("urchin: runtime error: {msg}");
+        return Err(ExitCode::from(1));
+    }
+    Ok(())
 }
 
 /// Render one `ParseError` as an ariadne diagnostic written to stderr.

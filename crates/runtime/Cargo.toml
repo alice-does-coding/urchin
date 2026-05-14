@@ -1,16 +1,15 @@
 [package]
-name = "urchin-cli"
+name = "urchin-runtime"
 edition.workspace = true
 version.workspace = true
 publish.workspace = true
 
-[[bin]]
-name = "urchin"
-path = "src/main.rs"
-
 [dependencies]
 urchin-parser = { path = "../parser" }
 urchin-types = { path = "../types" }
-urchin-runtime = { path = "../runtime" }
-clap = { version = "4", features = ["derive"] }
-ariadne = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lib]
+name = "urchin_runtime"
+path = "src/lib.rs"
