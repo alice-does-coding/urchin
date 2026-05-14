@@ -172,7 +172,12 @@ where
     }
 }
 
-/// `Handler` ::= `on` TypePath Ident? `{` Stmt* `}`
+/// `Handler` ::= `on` TypePath Ident? ( `->` TypeExpr )? `{` Stmt* `}`
+///
+/// The optional `-> TypeExpr` is the handler's return type. When present,
+/// the body must produce a value of that type via its trailing expression
+/// (block-expression semantics; the typechecker enforces). When absent,
+/// the type is inferred (or unit if the body has no trailing expression).
 fn handler_parser<'src, I>(
 ) -> impl Parser<'src, I, Handler, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -185,19 +190,24 @@ where
         .at_least(1)
         .collect::<Vec<_>>();
     let binding = segment.or_not();
+    let return_ty = just(Token::Arrow)
+        .ignore_then(type_expr_parser())
+        .or_not();
 
     just(Token::KwOn)
         .ignore_then(type_path)
         .then(binding)
+        .then(return_ty)
         .then(
             stmt_parser()
                 .repeated()
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map(|((message_type, binding), body)| Handler {
+        .map(|(((message_type, binding), return_ty), body)| Handler {
             message_type,
             binding,
+            return_ty,
             body,
         })
 }
@@ -697,6 +707,52 @@ mod tests {
     fn parses_handler_with_dotted_message_type() {
         let r = first_role("role X { /// _handlers on io.sim.Tick {} }");
         assert_eq!(r.handlers[0].message_type.len(), 3);
+    }
+
+    #[test]
+    fn handler_without_return_type_has_none() {
+        let r = first_role("role X { /// _handlers on Tick {} }");
+        assert!(r.handlers[0].return_ty.is_none());
+    }
+
+    #[test]
+    fn parses_handler_with_return_type() {
+        let r = first_role("role X { /// _handlers on Tick -> int { 0 } }");
+        assert_eq!(
+            r.handlers[0].return_ty,
+            Some(TypeExpr::Path(vec!["int".into()]))
+        );
+    }
+
+    #[test]
+    fn parses_handler_with_binding_and_return_type() {
+        let r = first_role("role X { /// _handlers on Cue c -> Trace { c } }");
+        assert_eq!(r.handlers[0].binding.as_deref(), Some("c"));
+        assert_eq!(
+            r.handlers[0].return_ty,
+            Some(TypeExpr::Path(vec!["Trace".into()]))
+        );
+    }
+
+    #[test]
+    fn parses_handler_with_complex_return_type() {
+        // `[Episode]` as return type — list type.
+        let r = first_role("role X { /// _handlers on Cue c -> [Episode] { [] } }");
+        assert!(matches!(
+            r.handlers[0].return_ty,
+            Some(TypeExpr::List(_))
+        ));
+    }
+
+    #[test]
+    fn parses_handler_with_function_return_type() {
+        // Higher-order: handler returns a function. Probably rare but the
+        // grammar admits it because `->` is right-assoc in TypeExpr.
+        let r = first_role("role X { /// _handlers on Tick -> int -> int { 0 } }");
+        assert!(matches!(
+            r.handlers[0].return_ty,
+            Some(TypeExpr::Function { .. })
+        ));
     }
 
     #[test]

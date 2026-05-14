@@ -99,11 +99,21 @@ pub struct StateField {
     pub init: Expr,
 }
 
-/// `on TypePath binding? { stmt* }`
+/// `on TypePath binding? ( -> ReturnTy )? { stmt* }`
+///
+/// Handler bodies are **block expressions**: the trailing `Stmt::ExprStmt`,
+/// if present, is the handler's return value. If the body's last stmt is
+/// not an `ExprStmt`, the handler returns unit.
+///
+/// `return_ty` is the optional declared return type. When `None`, the
+/// type is inferred from the body's trailing expression (or unit if
+/// none). When `Some`, the typechecker enforces that the body's value
+/// matches.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handler {
     pub message_type: Vec<String>,
     pub binding: Option<String>,
+    pub return_ty: Option<TypeExpr>,
     pub body: Vec<Stmt>,
 }
 

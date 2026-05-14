@@ -108,6 +108,10 @@ fn write_handler(out: &mut String, h: &Handler, depth: usize) {
     if let Some(b) = &h.binding {
         write!(out, " {}", b).unwrap();
     }
+    if let Some(ret) = &h.return_ty {
+        out.push_str(" -> ");
+        write_type(out, ret);
+    }
     write_block(out, &h.body, depth);
     out.push('\n');
 }

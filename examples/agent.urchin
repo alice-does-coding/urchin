@@ -22,8 +22,9 @@ role photographer {
   shotsTaken = 0
 
   /// _handlers
-  on tick {
+  on tick -> int {
     shotsTaken = shotsTaken ~> shotsTaken + 1
+    shotsTaken
   }
 }
 
@@ -32,8 +33,9 @@ role musician {
   notesPlayed = 0
 
   /// _handlers
-  on tick {
+  on tick -> int {
     notesPlayed = notesPlayed ~> notesPlayed + 1
+    notesPlayed
   }
 }
 
@@ -42,8 +44,9 @@ role director {
   scenesDirected = 0
 
   /// _handlers
-  on tick {
+  on tick -> int {
     scenesDirected = scenesDirected ~> scenesDirected + 1
+    scenesDirected
   }
 }
 
