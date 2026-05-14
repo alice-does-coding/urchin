@@ -1,36 +1,38 @@
 /// mind.ur — the urchin's first actor. composes three roles into a
-/// minimal cognitive agent: an EpisodicMemory that records events,
-/// a Hunger drive that tracks need, and a Voice that signals to siblings.
+/// minimal cognitive agent: an episodicMemory that records events,
+/// a hunger drive that tracks need, and a voice that signals to siblings.
 ///
 /// the actor body has three sections in canonical order:
 ///   1. IO spines (the substrate the actor talks to)
 ///   2. role instances with their IO + role-to-role wiring
 ///   3. orchestration (dispatch declarations on spine.event)
 ///
-/// instance names are camelCase; actor names are camelCase.
+/// every identifier in urchin is camelCase — including role names,
+/// message types, and constructor patterns. the reader infers what
+/// kind of thing a name refers to from syntactic position.
 
-role Hunger {
+role hunger {
   ~ level: float
 
-  on Tick {
+  on tick {
     level = level ~> level + 0.01
     if level > 0.7 {
-      broadcast Wants("food")
+      broadcast wants("food")
     }
   }
 }
 
-role EpisodicMemory {
-  record: Event -> Unit
-  recall: Cue -> [Episode] / {io.sim.comms}
+role episodicMemory {
+  record: event -> unit
+  recall: cue -> [episode] / {io.sim.comms}
 
-  ~ episodes: [Episode]
+  ~ episodes: [episode]
 
-  on Event e {
+  on event e {
     episodes = episodes ~> episodes + [e]
   }
 
-  on Cue c {
+  on cue c {
     matches = episodes
       |> filter(by: c)
       |> rank(by: c.weight)
@@ -38,14 +40,14 @@ role EpisodicMemory {
   }
 }
 
-role Voice {
-  ~ mood: Mood
+role voice {
+  ~ mood: mood
 
-  on Tick {
+  on tick {
     match mood {
-      Calm     -> broadcast Hum
-      Anxious  -> broadcast Whisper
-      Excited  -> broadcast Shout
+      calm     -> broadcast hum
+      anxious  -> broadcast whisper
+      excited  -> broadcast shout
       _        -> {}
     }
   }

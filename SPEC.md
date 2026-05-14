@@ -196,13 +196,14 @@ role EpisodicMemory {
 
 ### 3.6 Naming rules **(planned — not yet enforced by the compiler)**
 
-- Role names, message types, constructors: **PascalCase** — `EpisodicMemory`, `Hunger`, `Voice`, `Tick`, `Wants`.
-- Interface methods, state fields, handler bindings, locals, IO spine names, role instance names, actor names: **camelCase** — `recall`, `episodes`, `episodicMemory`, `mind`.
+- **All identifiers are camelCase** — role names, actor names, message types, constructor patterns, broadcast tags, IO spine names, role instance names, methods, fields, handler bindings, locals. PascalCase does not appear in idiomatic Urchin.
+- Single-word identifiers are simply lowercase: `hunger`, `voice`, `tick`, `cue`, `episodes`, `mood`, `calm`, `food`.
+- Multi-word identifiers join words with internal capitals: `episodicMemory`, `lastSnapshotAt`, `actorId`, `isSatisfied`.
 - Predicate methods must begin with `is`, `has`, or `can` (e.g. `isSatisfied`, `hasRoom`, `canRecall`).
 - Methods or fields whose value is a timestamp must end in `At` (`createdAt`, `seenAt`).
 - Identifiers referencing entities by handle must end in `Id` (`actorId`, `traceId`).
 
-The compiler will treat these as hard syntactic constraints, not lint warnings. Naming carries type info, and naming-as-rule turns conventions into free training signal for AI writing or reading Urchin code.
+The compiler will treat these as hard syntactic constraints, not lint warnings. Naming carries information (predicates / timestamps / handles), and naming-as-rule turns conventions into free training signal for AI writing or reading Urchin code. The reader infers what kind of thing a name refers to from syntactic position — `role hunger {`, `on tick {`, `match s { calm -> ... }` — not from casing.
 
 ### 3.7 Tests adjacent to a role **(planned)**
 
