@@ -1,7 +1,7 @@
-//! Tree-walking interpreter for role handlers.
+//! Tree-walking interpreter for facet handlers.
 //!
 //! Evaluates `Stmt` and `Expr` nodes against an `Env` (transient locals)
-//! and a `RoleState` (persistent state fields). State mutation goes
+//! and a `FacetState` (persistent state fields). State mutation goes
 //! through the state-field path — assigns where the LHS matches a known
 //! state-field name emit a `state_assign` event; assigns to fresh names
 //! become local bindings.
@@ -17,7 +17,7 @@
 
 use urchin_parser::ast::{BinOp, Expr, Handler, Stmt};
 
-use crate::env::{Env, RoleState};
+use crate::env::{Env, FacetState};
 use crate::events::{Event, EventSink};
 use crate::value::Value;
 
@@ -25,9 +25,9 @@ use crate::value::Value;
 /// or `Unit` if the body has no trailing expression.
 pub fn run_handler(
     handler: &Handler,
-    state: &mut RoleState,
+    state: &mut FacetState,
     msg_binding: Option<Value>,
-    actor: &str,
+    scheme: &str,
     instance: &str,
     sink: &mut dyn EventSink,
 ) -> Result<Value, String> {
@@ -39,7 +39,7 @@ pub fn run_handler(
     let n = handler.body.len();
     let mut tail_value = Value::Unit;
     for (i, stmt) in handler.body.iter().enumerate() {
-        let v = run_stmt(stmt, &mut env, state, actor, instance, sink)?;
+        let v = run_stmt(stmt, &mut env, state, scheme, instance, sink)?;
         if i == n - 1 {
             if let Stmt::ExprStmt(_) = stmt {
                 tail_value = v;
@@ -52,8 +52,8 @@ pub fn run_handler(
 fn run_stmt(
     stmt: &Stmt,
     env: &mut Env,
-    state: &mut RoleState,
-    actor: &str,
+    state: &mut FacetState,
+    scheme: &str,
     instance: &str,
     sink: &mut dyn EventSink,
 ) -> Result<Value, String> {
@@ -64,7 +64,7 @@ fn run_stmt(
                 let old = state.get(name).cloned().unwrap_or(Value::Unit);
                 state.set(name, new.clone());
                 sink.emit(Event::StateAssign {
-                    actor: actor.to_string(),
+                    scheme: scheme.to_string(),
                     instance: instance.to_string(),
                     field: name.clone(),
                     old,
@@ -80,7 +80,7 @@ fn run_stmt(
             let branch = if is_truthy(&c) { Some(then_body) } else { else_body.as_ref() };
             if let Some(body) = branch {
                 for s in body {
-                    run_stmt(s, env, state, actor, instance, sink)?;
+                    run_stmt(s, env, state, scheme, instance, sink)?;
                 }
             }
             Ok(Value::Unit)
@@ -89,7 +89,7 @@ fn run_stmt(
     }
 }
 
-fn eval_expr(e: &Expr, env: &Env, state: &RoleState) -> Result<Value, String> {
+fn eval_expr(e: &Expr, env: &Env, state: &FacetState) -> Result<Value, String> {
     match e {
         Expr::Int(n) => Ok(Value::Int(*n)),
         Expr::Float(n) => Ok(Value::Float(*n)),
@@ -128,7 +128,7 @@ fn eval_expr(e: &Expr, env: &Env, state: &RoleState) -> Result<Value, String> {
             }
         }
         Expr::Call { callee, args: _ } => {
-            // Milestone 1 has no built-in callables and no role-instance call
+            // Milestone 1 has no built-in callables and no facet-instance call
             // semantics. Any call in a handler body is currently an error;
             // the example we're targeting doesn't use any.
             Err(format!("call to `{callee}` not supported in milestone-1 runtime"))
@@ -168,8 +168,8 @@ fn is_truthy(v: &Value) -> bool {
 // --- Convenience for callers and tests --------------------------------
 
 /// Set a state field, used by the instantiator + tests when bootstrapping
-/// a role's initial state.
-pub fn eval_init(init: &Expr, state: &RoleState) -> Result<Value, String> {
+/// a facet's initial state.
+pub fn eval_init(init: &Expr, state: &FacetState) -> Result<Value, String> {
     let env = Env::new();
     eval_expr(init, &env, state)
 }
@@ -183,15 +183,15 @@ mod tests {
 
     fn first_handler(src: &str) -> Handler {
         let module = parse(src).expect("parse");
-        let role = module.roles.into_iter().next().expect("role");
-        role.handlers.into_iter().next().expect("handler")
+        let facet = module.facets.into_iter().next().expect("facet");
+        facet.handlers.into_iter().next().expect("handler")
     }
 
-    fn init_state(src: &str) -> RoleState {
+    fn init_state(src: &str) -> FacetState {
         let module = parse(src).expect("parse");
-        let role = &module.roles[0];
-        let mut state = RoleState::new();
-        for f in &role.state {
+        let facet = &module.facets[0];
+        let mut state = FacetState::new();
+        for f in &facet.state {
             let v = eval_init(&f.init, &state).expect("init evaluates");
             state.set(&f.name, v);
         }
@@ -200,8 +200,8 @@ mod tests {
 
     #[test]
     fn evaluates_int_literal_handler() {
-        let h = first_handler("role X { /// _handlers on Tick -> int { 7 } }");
-        let mut state = RoleState::new();
+        let h = first_handler("facet X { /// _handlers on Tick -> int { 7 } }");
+        let mut state = FacetState::new();
         let mut sink = VecSink::default();
         let v = run_handler(&h, &mut state, None, "a", "i", &mut sink).unwrap();
         assert_eq!(v, Value::Int(7));
@@ -210,8 +210,8 @@ mod tests {
 
     #[test]
     fn arithmetic_returns_correct_value() {
-        let h = first_handler("role X { /// _handlers on Tick -> int { 1 + 2 * 3 } }");
-        let mut state = RoleState::new();
+        let h = first_handler("facet X { /// _handlers on Tick -> int { 1 + 2 * 3 } }");
+        let mut state = FacetState::new();
         let mut sink = VecSink::default();
         let v = run_handler(&h, &mut state, None, "a", "i", &mut sink).unwrap();
         assert_eq!(v, Value::Int(7));
@@ -219,8 +219,8 @@ mod tests {
 
     #[test]
     fn state_shift_increments_and_returns() {
-        // The canonical agent.urchin role shape.
-        let src = "role X {
+        // The canonical agent.urchin facet shape.
+        let src = "facet X {
                      /// _state
                      shotsTaken = 0
 
@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn state_shift_emits_state_assign_event() {
-        let src = "role X {
+        let src = "facet X {
                      /// _state shotsTaken = 0
                      /// _handlers on tick -> int { shotsTaken = shotsTaken ~> shotsTaken + 1  shotsTaken }
                    }";
@@ -261,8 +261,8 @@ mod tests {
             .filter(|e| matches!(e, Event::StateAssign { .. }))
             .collect();
         assert_eq!(assigns.len(), 1);
-        if let Event::StateAssign { actor, instance, field, old, new } = assigns[0] {
-            assert_eq!(actor, "creativePersona");
+        if let Event::StateAssign { scheme, instance, field, old, new } = assigns[0] {
+            assert_eq!(scheme, "creativePersona");
             assert_eq!(instance, "photographer");
             assert_eq!(field, "shotsTaken");
             assert_eq!(*old, Value::Int(0));
@@ -274,7 +274,7 @@ mod tests {
     fn local_binding_does_not_emit_state_assign() {
         // `tmp = ...` for a name that ISN'T a state field is a local binding;
         // no state_assign event.
-        let src = "role X {
+        let src = "facet X {
                      /// _state shotsTaken = 0
                      /// _handlers on tick -> int { tmp = shotsTaken + 1  tmp }
                    }";
@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn if_branch_runs_when_truthy() {
-        let src = "role X {
+        let src = "facet X {
                      /// _state level = 0
                      /// _handlers on tick -> int {
                        if 1 > 0 { level = level ~> 42 }
@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn if_branch_skipped_when_falsy() {
-        let src = "role X {
+        let src = "facet X {
                      /// _state level = 0
                      /// _handlers on tick -> int {
                        if 0 > 1 { level = level ~> 42 }
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn handler_without_trailing_expr_returns_unit() {
-        let src = "role X {
+        let src = "facet X {
                      /// _state x = 0
                      /// _handlers on tick { x = x ~> 1 }
                    }";

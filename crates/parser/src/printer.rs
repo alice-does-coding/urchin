@@ -2,7 +2,7 @@
 //!
 //! Output is canonical (deterministic; idempotent under re-formatting) and
 //! round-trip safe (re-parsing produces an equal AST). Two-space indent,
-//! brace-on-same-line, sections inside roles and actors separated by a
+//! brace-on-same-line, sections inside facets and schemes separated by a
 //! blank line.
 //!
 //! **Lossy w.r.t. comments.** `///` comments are stripped by the lexer and
@@ -12,28 +12,28 @@
 use std::fmt::Write;
 
 use crate::ast::{
-    ActorDecl, BinOp, CallArg, DispatchMode, Expr, Handler, IoDecl, IoInterfaceEntry, Module,
-    Pattern, RoleDecl, RoleInstance, Stmt, TypeExpr,
+    SchemeDecl, BinOp, CallArg, DispatchMode, Expr, Handler, IoDecl, IoInterfaceEntry, Module,
+    Pattern, FacetDecl, FacetInstance, Stmt, TypeExpr,
 };
 
 const INDENT: &str = "  ";
 
 /// Format a whole module as Urchin source.
 ///
-/// Output order follows the file-flow convention (small-to-large): roles
+/// Output order follows the file-flow convention (small-to-large): facets
 /// first (atomic primitives), then io decls (library-shaped contracts),
-/// then actors (orchestration). Within each group, declarations keep their
+/// then schemes (orchestration). Within each group, declarations keep their
 /// source order.
 pub fn format(module: &Module) -> String {
     let mut out = String::new();
     let mut first = true;
 
-    for role in &module.roles {
+    for facet in &module.facets {
         if !first {
             out.push_str("\n\n");
         }
         first = false;
-        write_role(&mut out, role);
+        write_facet(&mut out, facet);
     }
     for io in &module.io_decls {
         if !first {
@@ -42,12 +42,12 @@ pub fn format(module: &Module) -> String {
         first = false;
         write_io_decl(&mut out, io);
     }
-    for actor in &module.actors {
+    for scheme in &module.schemes {
         if !first {
             out.push_str("\n\n");
         }
         first = false;
-        write_actor(&mut out, actor);
+        write_scheme(&mut out, scheme);
     }
 
     if !out.is_empty() {
@@ -62,10 +62,10 @@ fn write_indent(out: &mut String, depth: usize) {
     }
 }
 
-// --- Role ---------------------------------------------------------------
+// --- Facet ---------------------------------------------------------------
 
-fn write_role(out: &mut String, r: &RoleDecl) {
-    write!(out, "role {} {{", r.name).unwrap();
+fn write_facet(out: &mut String, r: &FacetDecl) {
+    write!(out, "facet {} {{", r.name).unwrap();
 
     let has_state = !r.state.is_empty();
     let has_handlers = !r.handlers.is_empty();
@@ -128,17 +128,17 @@ fn write_handler(out: &mut String, h: &Handler, depth: usize) {
     out.push('\n');
 }
 
-// --- Actor --------------------------------------------------------------
+// --- Scheme --------------------------------------------------------------
 
-fn write_actor(out: &mut String, a: &ActorDecl) {
-    write!(out, "actor {}", a.name).unwrap();
+fn write_scheme(out: &mut String, a: &SchemeDecl) {
+    write!(out, "scheme {}", a.name).unwrap();
     if let Some(parent) = &a.parent {
         write!(out, " @ {parent}").unwrap();
     }
     out.push_str(" {");
 
     let has_spines = !a.io_spines.is_empty();
-    let has_instances = !a.role_instances.is_empty();
+    let has_instances = !a.facet_instances.is_empty();
     let has_dispatch = !a.dispatch.is_empty();
     let empty = !has_spines && !has_instances && !has_dispatch;
 
@@ -165,9 +165,9 @@ fn write_actor(out: &mut String, a: &ActorDecl) {
             out.push('\n');
         }
         write_indent(out, 1);
-        out.push_str("/// _roles\n");
-        for inst in &a.role_instances {
-            write_role_instance(out, inst, 1);
+        out.push_str("/// _facets\n");
+        for inst in &a.facet_instances {
+            write_facet_instance(out, inst, 1);
             out.push('\n');
         }
     }
@@ -189,7 +189,7 @@ fn write_actor(out: &mut String, a: &ActorDecl) {
     out.push('}');
 }
 
-fn write_role_instance(out: &mut String, inst: &RoleInstance, depth: usize) {
+fn write_facet_instance(out: &mut String, inst: &FacetInstance, depth: usize) {
     write_indent(out, depth);
     out.push_str(&inst.name);
     out.push('(');
@@ -624,67 +624,67 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_empty_role() {
-        round_trip("role X {}");
+    fn round_trips_empty_facet() {
+        round_trip("facet X {}");
     }
 
     #[test]
-    fn round_trips_role_with_state() {
-        round_trip("role Hunger { /// _state level = 0 }");
+    fn round_trips_facet_with_state() {
+        round_trip("facet Hunger { /// _state level = 0 }");
     }
 
     #[test]
-    fn round_trips_role_with_state_and_handlers() {
-        round_trip("role X { /// _state traces = 0  /// _handlers on Cue c { reply traces } }");
+    fn round_trips_facet_with_state_and_handlers() {
+        round_trip("facet X { /// _state traces = 0  /// _handlers on Cue c { reply traces } }");
     }
 
     #[test]
     fn round_trips_arithmetic_with_precedence() {
-        round_trip("role X { /// _handlers on T { x = 1 + 2 * 3 } }");
+        round_trip("facet X { /// _handlers on T { x = 1 + 2 * 3 } }");
     }
 
     #[test]
     fn round_trips_state_shift_chain() {
-        round_trip("role X { /// _state x = 0  /// _handlers on T { x = x ~> x + 1 } }");
+        round_trip("facet X { /// _state x = 0  /// _handlers on T { x = x ~> x + 1 } }");
     }
 
     #[test]
     fn round_trips_pipe_chain() {
-        round_trip("role X { /// _handlers on T { x = a |> b() |> c(d) } }");
+        round_trip("facet X { /// _handlers on T { x = a |> b() |> c(d) } }");
     }
 
     #[test]
     fn round_trips_named_args_and_field_access() {
-        round_trip("role X { /// _handlers on T { x = filter(by: c.weight) } }");
+        round_trip("facet X { /// _handlers on T { x = filter(by: c.weight) } }");
     }
 
     #[test]
     fn round_trips_lists() {
-        round_trip("role X { /// _state xs = []  /// _handlers on T { x = [1, 2, 3] } }");
+        round_trip("facet X { /// _state xs = []  /// _handlers on T { x = [1, 2, 3] } }");
     }
 
     #[test]
     fn round_trips_function_type_with_effects_in_state() {
         round_trip(
-            "role X { /// _state handler: Cue -> [Trace] / {io.sim.comms} = noop }",
+            "facet X { /// _state handler: Cue -> [Trace] / {io.sim.comms} = noop }",
         );
     }
 
     #[test]
     fn round_trips_match() {
         round_trip(
-            "role X { /// _handlers on S s { match s { Threat -> { x = 1 } _ -> {} } } }",
+            "facet X { /// _handlers on S s { match s { Threat -> { x = 1 } _ -> {} } } }",
         );
     }
 
     #[test]
-    fn round_trips_actor() {
+    fn round_trips_scheme() {
         round_trip(
-            "actor mind {
+            "scheme mind {
                /// _io
                clock: io.sim.clock
                siblings: io.sim.comms.peer
-               /// _roles
+               /// _facets
                episodicMemory(clock, siblings)
                voice(clock)
                /// _dispatch_scripts
@@ -694,36 +694,36 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_actor_with_parent() {
+    fn round_trips_scheme_with_parent() {
         round_trip(
-            "actor mind @ rubberDuck {
+            "scheme mind @ rubberDuck {
                /// _io
                clock: io.sim.clock
-               /// _roles
+               /// _facets
                hunger(clock)
              }",
         );
     }
 
     #[test]
-    fn formats_actor_with_parent() {
-        let m = parse("actor mind @ rubberDuck {}").unwrap();
+    fn formats_scheme_with_parent() {
+        let m = parse("scheme mind @ rubberDuck {}").unwrap();
         let f = format(&m);
-        assert!(f.contains("actor mind @ rubberDuck"), "got:\n{f}");
+        assert!(f.contains("scheme mind @ rubberDuck"), "got:\n{f}");
     }
 
     #[test]
-    fn formats_root_actor_without_at_clause() {
-        let m = parse("actor mind {}").unwrap();
+    fn formats_root_scheme_without_at_clause() {
+        let m = parse("scheme mind {}").unwrap();
         let f = format(&m);
-        assert!(!f.contains("@"), "root actor shouldn't render `@`; got:\n{f}");
+        assert!(!f.contains("@"), "root scheme shouldn't render `@`; got:\n{f}");
     }
 
     #[test]
-    fn round_trips_module_with_roles_and_actor() {
+    fn round_trips_module_with_facets_and_scheme() {
         round_trip(
-            "role Hunger { /// _state level = 0 }
-             actor mind { /// _io clock: io.sim.clock  /// _roles hunger(clock) }",
+            "facet Hunger { /// _state level = 0 }
+             scheme mind { /// _io clock: io.sim.clock  /// _facets hunger(clock) }",
         );
     }
 
@@ -742,14 +742,14 @@ mod tests {
     // --- Spot tests for specific output shape ---
 
     #[test]
-    fn formats_empty_role_inline() {
-        let m = parse("role X {}").unwrap();
-        assert_eq!(format(&m), "role X {}\n");
+    fn formats_empty_facet_inline() {
+        let m = parse("facet X {}").unwrap();
+        assert_eq!(format(&m), "facet X {}\n");
     }
 
     #[test]
     fn formats_arithmetic_without_unnecessary_parens() {
-        let m = parse("role X { /// _handlers on T { x = 1 + 2 } }").unwrap();
+        let m = parse("facet X { /// _handlers on T { x = 1 + 2 } }").unwrap();
         let f = format(&m);
         assert!(!f.contains("(1"), "no parens around `1` expected; got:\n{f}");
         assert!(f.contains("x = 1 + 2"));
@@ -757,7 +757,7 @@ mod tests {
 
     #[test]
     fn single_pipe_stays_inline() {
-        let m = parse("role X { /// _handlers on T { x = a |> b() } }").unwrap();
+        let m = parse("facet X { /// _handlers on T { x = a |> b() } }").unwrap();
         let f = format(&m);
         assert!(f.contains("x = a |> b()"), "expected inline pipe; got:\n{f}");
         assert!(!f.contains("\n      |>"), "single pipe should not wrap; got:\n{f}");
@@ -765,7 +765,7 @@ mod tests {
 
     #[test]
     fn three_stage_pipe_wraps_across_lines() {
-        let m = parse("role X { /// _handlers on T { x = a |> b() |> c() } }").unwrap();
+        let m = parse("facet X { /// _handlers on T { x = a |> b() |> c() } }").unwrap();
         let f = format(&m);
         // After "x = a", a newline + indent + "|>" should appear.
         assert!(
@@ -776,12 +776,12 @@ mod tests {
 
     #[test]
     fn long_pipe_chain_in_assignment_round_trips() {
-        round_trip("role X { /// _handlers on T { matches = a |> b() |> c() |> d() |> e() } }");
+        round_trip("facet X { /// _handlers on T { matches = a |> b() |> c() |> d() |> e() } }");
     }
 
     #[test]
     fn pipe_wrap_is_idempotent() {
-        idempotent("role X { /// _handlers on T { x = a |> b() |> c() |> d() } }");
+        idempotent("facet X { /// _handlers on T { x = a |> b() |> c() |> d() } }");
     }
 
     // --- IO declarations ---
@@ -828,31 +828,31 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_module_with_role_io_and_actor() {
+    fn round_trips_module_with_facet_io_and_scheme() {
         round_trip(
-            "role Hunger { /// _state level = 0 }
+            "facet Hunger { /// _state level = 0 }
              io clock { /// _interface event tick: timestamp }
-             actor mind { /// _io c: io.sim.clock  /// _roles hunger(c) }",
+             scheme mind { /// _io c: io.sim.clock  /// _facets hunger(c) }",
         );
     }
 
     #[test]
-    fn module_order_is_roles_then_io_then_actors() {
-        // Mixed declaration order in source — canonical output puts roles
-        // first, io decls next, actors last (small-to-large).
-        let src = "actor mind {}
+    fn module_order_is_facets_then_io_then_schemes() {
+        // Mixed declaration order in source — canonical output puts facets
+        // first, io decls next, schemes last (small-to-large).
+        let src = "scheme mind {}
                    io clock {}
-                   role X {}";
+                   facet X {}";
         let m = parse(src).unwrap();
         let f = format(&m);
-        let role_pos = f.find("role X").expect("role missing");
+        let facet_pos = f.find("facet X").expect("facet missing");
         let io_pos = f.find("io clock").expect("io missing");
-        let actor_pos = f.find("actor mind").expect("actor missing");
-        assert!(role_pos < io_pos && io_pos < actor_pos, "got:\n{f}");
+        let scheme_pos = f.find("scheme mind").expect("scheme missing");
+        assert!(facet_pos < io_pos && io_pos < scheme_pos, "got:\n{f}");
     }
 
     #[test]
     fn round_trips_record_type_in_state() {
-        round_trip("role X { /// _state shape: {x: int, y: int} = empty }");
+        round_trip("facet X { /// _state shape: {x: int, y: int} = empty }");
     }
 }

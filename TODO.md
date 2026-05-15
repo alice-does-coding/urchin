@@ -4,9 +4,9 @@ _Punch list. Strategic roadmap lives in `DIRECTION.md`; this file tracks near-te
 
 ## Architecture decisions (locked this session, 2026-05-13)
 
-- [x] Three-layer architecture: roles / actors / IO with paradigm-per-layer
-- [x] Roles are discrete, generic, no inter-role relations
-- [x] Actors are minimal: composed roles + IO spines + dispatch decls
+- [x] Three-layer architecture: facets / schemes / IO with paradigm-per-layer
+- [x] Facets are discrete, generic, no inter-facet relations
+- [x] Schemes are minimal: composed facets + IO spines + dispatch decls
 - [x] IO is the single boundary substrate; namespace `io.{sim,http,ws,sms,...}.*`
 - [x] Sim is deterministic + replayable (seeded PRNG)
 - [x] IO tracked as effect; full algebraic effects with handlers
@@ -17,18 +17,18 @@ _Punch list. Strategic roadmap lives in `DIRECTION.md`; this file tracks near-te
 ## SPEC.md sections to draft
 
 - [ ] §1 — Lexical structure (formalize what the lexer accepts)
-- [ ] §2 — Type system (records, sums, generics, refinement, Option/Result, kinship at actor level, effect types)
-- [x] §3 — Role grammar (rewritten in lockstep with parser this session)
-- [ ] §4 — Actor grammar (sketched; needs hardening as parser lands)
+- [ ] §2 — Type system (records, sums, generics, refinement, Option/Result, kinship at scheme level, effect types)
+- [x] §3 — Facet grammar (rewritten in lockstep with parser this session)
+- [ ] §4 — Scheme grammar (sketched; needs hardening as parser lands)
 - [x] §5 — Wire semantics (folded into §4/§6 — no separate wire layer)
 - [ ] §6 — IO grammar (sketched; needs hardening)
 - [ ] §7 — Error & effect model
-- [ ] §8 — Stdlib role taxonomy
+- [ ] §8 — Stdlib facet taxonomy
 - [ ] §9 — Worked examples (the seed corpus; first one in `examples/agent.urchin`)
 
 ## Resolved §3.9 questions (this session)
 
-- [x] §3.9.A — Multi-kinship _(dissolved — roles do not relate to each other)_
+- [x] §3.9.A — Multi-kinship _(dissolved — facets do not relate to each other)_
 - [x] §3.9.B — `~>` distinct from `=` _(both reasons: greppability + journal hook)_
 - [x] §3.9.D — Comment policy _(only `///`)_
 - [x] §3.9.E — Implicit vs explicit sections _(implicit, identified by syntactic shape)_
@@ -38,7 +38,7 @@ _Punch list. Strategic roadmap lives in `DIRECTION.md`; this file tracks near-te
 
 Parser ships in 3 commits this session:
 
-- [x] `65ed4c9` — first parse loop: role + state + dotted-path types
+- [x] `65ed4c9` — first parse loop: facet + state + dotted-path types
 - [x] `8ef8b63` — function types, interface methods, handler headers
 - [x] `1a0cae5` — handler bodies: expressions, assigns, reply, precedence
 
@@ -49,8 +49,8 @@ Parser ships in 3 commits this session:
 - [ ] **Comparisons + conditionals + broadcast** — `>` `<` `==`, `if/else`, `broadcast Msg(args?)`. Unblocks reactive cognition (`if level > 7 { broadcast Wants }`).
 - [ ] **List types `[T]` + literal `[a, b]`** — unblocks `~ episodes: [Episode]` for real instead of the `int` placeholder.
 - [ ] **Pipe chains end-to-end** — named arguments (`filter(by: c)`) so the lightsaber `traces |> filter(by: c) |> reply` works.
-- [ ] **Actor declarations** — start §4 grammar in the parser.
-- [ ] **IO spine declarations** — `name: io.<path>` syntax for actors.
+- [ ] **Scheme declarations** — start §4 grammar in the parser.
+- [ ] **IO spine declarations** — `name: io.<path>` syntax for schemes.
 
 ## Implementation — deeper choices ahead
 

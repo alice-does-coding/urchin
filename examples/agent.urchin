@@ -1,10 +1,10 @@
 /// agent.urchin — seed corpus for urchin. file flow is small-to-large:
-/// roles first (atomic creative activities), then the child actor
-/// (creativePersona), then the parent actor (rubberDuck) at the bottom.
+/// facets first (atomic creative activities), then the child scheme
+/// (creativePersona), then the parent scheme (rubberDuck) at the bottom.
 ///
 /// the topology: rubberDuck (a persona on the social-media simulation)
 /// HAS a creativePersona (the slot that holds creative output). the
-/// creativePersona composes three creative roles — photographer,
+/// creativePersona composes three creative facets — photographer,
 /// musician, director — each producing its own kind of output as the
 /// world ticks.
 ///
@@ -13,7 +13,7 @@
 /// no type annotation (inferred from init); collections are just
 /// collections (no `[T]` annotation needed).
 ///
-/// roles have NO interface methods. cross-role coordination happens via
+/// facets have NO interface methods. cross-facet coordination happens via
 /// broadcasts and message handlers; cross-IO interfaces (the protocol
 /// each io.* module enforces) are a separate concern at the IO layer.
 
@@ -25,7 +25,7 @@ io clock {
   rate = 60
 }
 
-role photographer {
+facet photographer {
   /// _state
   shotsTaken = 0
 
@@ -36,7 +36,7 @@ role photographer {
   }
 }
 
-role musician {
+facet musician {
   /// _state
   notesPlayed = 0
 
@@ -47,7 +47,7 @@ role musician {
   }
 }
 
-role director {
+facet director {
   /// _state
   scenesDirected = 0
 
@@ -58,11 +58,11 @@ role director {
   }
 }
 
-actor creativePersona @ rubberDuck {
+scheme creativePersona @ rubberDuck {
   /// _io
   clock: io.sim.clock
 
-  /// _roles
+  /// _facets
   photographer(clock)
   musician(clock)
   director(clock)
@@ -71,7 +71,7 @@ actor creativePersona @ rubberDuck {
   on clock.tick parallel
 }
 
-actor rubberDuck {
+scheme rubberDuck {
   /// _io
   siblings: io.sim.comms.peer
 }

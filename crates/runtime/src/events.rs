@@ -2,8 +2,8 @@
 //!
 //! Every interesting moment in a run emits one line of JSON. The five
 //! event types cover the v1 milestone:
-//!   - `actor_instantiated`
-//!   - `role_instantiated`
+//!   - `scheme_instantiated`
+//!   - `facet_instantiated`
 //!   - `tick`
 //!   - `state_assign` (a `~>` swap; the journal hook even pre-journal)
 //!   - `handler_return`
@@ -18,12 +18,12 @@ use crate::value::Value;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
-    ActorInstantiated {
-        actor: String,
+    SchemeInstantiated {
+        scheme: String,
         parent: Option<String>,
     },
-    RoleInstantiated {
-        actor: String,
+    FacetInstantiated {
+        scheme: String,
         instance: String,
         state: Vec<(String, Value)>,
     },
@@ -31,14 +31,14 @@ pub enum Event {
         n: u64,
     },
     StateAssign {
-        actor: String,
+        scheme: String,
         instance: String,
         field: String,
         old: Value,
         new: Value,
     },
     HandlerReturn {
-        actor: String,
+        scheme: String,
         instance: String,
         message: String,
         value: Value,
@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn state_assign_serializes_with_snake_case_tag() {
         let e = Event::StateAssign {
-            actor: "creativePersona".into(),
+            scheme: "creativePersona".into(),
             instance: "photographer".into(),
             field: "shotsTaken".into(),
             old: Value::Int(0),

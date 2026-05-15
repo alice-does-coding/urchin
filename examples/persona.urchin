@@ -1,0 +1,40 @@
+/// persona.urchin — a tiny GA-shaped persona that uses an llm io spine.
+/// pairs with io_llm.urchin (the io decl). once a module system lands
+/// these would import each other; for now they live as sibling sketches.
+
+io llm {
+  /// _interface
+  method ask: prompt -> response
+
+  /// _connection_handlers
+  model = "haiku"
+  temperature = 0
+}
+
+facet chatter {
+  /// _state
+  thingsAsked = 0
+
+  /// _handlers
+  on tick -> int {
+    thingsAsked = thingsAsked ~> thingsAsked + 1
+    thingsAsked
+  }
+}
+
+scheme persona @ feed {
+  /// _io
+  clock: io.sim.clock
+  assistant: io.llm
+
+  /// _facets
+  chatter(clock)
+
+  /// _dispatch_scripts
+  on clock.tick parallel
+}
+
+scheme feed {
+  /// _io
+  peers: io.sim.comms.peer
+}

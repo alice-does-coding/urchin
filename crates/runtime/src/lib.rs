@@ -2,10 +2,10 @@
 //!
 //! Milestone 1 surface:
 //! - `Value` — the runtime value type (Int / Float / Str / List / Record / Unit)
-//! - `interp` — evaluates `Stmt` and `Expr` against an `Env` + `RoleState`
-//! - `instantiate` — builds the actor tree from a parsed `Module`
+//! - `interp` — evaluates `Stmt` and `Expr` against an `Env` + `FacetState`
+//! - `instantiate` — builds the scheme tree from a parsed `Module`
 //! - `schedule` — sim clock that fires `clock.tick` events and the dispatch
-//!   driver that fans them out to role-instances
+//!   driver that fans them out to facet-instances
 //! - `events` — the structured JSON-Lines event log
 //! - `run` — top-level driver; consumes a parsed `Module` and emits events
 //!

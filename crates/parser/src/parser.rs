@@ -8,9 +8,9 @@ use chumsky::input::{Input, ValueInput};
 use chumsky::prelude::*;
 
 use crate::ast::{
-    ActorDecl, BinOp, CallArg, ConnectionHandler, DispatchDecl, DispatchMode, Expr, Handler,
-    IoDecl, IoInterfaceEntry, IoSpine, MatchArm, Module, Pattern, RecordField, RoleDecl,
-    RoleInstance, SpineEvent, StateField, Stmt, TypeAlias, TypeExpr,
+    SchemeDecl, BinOp, CallArg, ConnectionHandler, DispatchDecl, DispatchMode, Expr, Handler,
+    IoDecl, IoInterfaceEntry, IoSpine, MatchArm, Module, Pattern, RecordField, FacetDecl,
+    FacetInstance, SpineEvent, StateField, Stmt, TypeAlias, TypeExpr,
 };
 use crate::lexer::{lex, Span, Token};
 use crate::ParseError;
@@ -41,7 +41,7 @@ pub fn parse(source: &str) -> Result<Module, Vec<ParseError>> {
     })
 }
 
-/// `Module` ::= (RoleDecl | IoDecl | ActorDecl)*
+/// `Module` ::= (FacetDecl | IoDecl | SchemeDecl)*
 ///
 /// Top-level declarations in any order. Each kind sorts into its own
 /// vector on the `Module`.
@@ -51,26 +51,26 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
     enum TopLevel {
-        Role(RoleDecl),
-        Actor(ActorDecl),
+        Facet(FacetDecl),
+        Scheme(SchemeDecl),
         Io(IoDecl),
     }
 
     // `io` is not a reserved keyword (the `io.sim.clock` path syntax depends
-    // on it staying an Ident). Try the io-decl branch before role/actor so
+    // on it staying an Ident). Try the io-decl branch before facet/scheme so
     // the leading `io` ident is recognized as the keyword position.
     let item = choice((
         io_decl_parser().map(TopLevel::Io),
-        role_decl_parser().map(TopLevel::Role),
-        actor_decl_parser().map(TopLevel::Actor),
+        facet_decl_parser().map(TopLevel::Facet),
+        scheme_decl_parser().map(TopLevel::Scheme),
     ));
 
     item.repeated().collect::<Vec<_>>().map(|items| {
         let mut module = Module::default();
         for item in items {
             match item {
-                TopLevel::Role(r) => module.roles.push(r),
-                TopLevel::Actor(a) => module.actors.push(a),
+                TopLevel::Facet(r) => module.facets.push(r),
+                TopLevel::Scheme(a) => module.schemes.push(a),
                 TopLevel::Io(io) => module.io_decls.push(io),
             }
         }
@@ -78,16 +78,16 @@ where
     })
 }
 
-/// `RoleDecl` ::= `role` Ident `{`
+/// `FacetDecl` ::= `facet` Ident `{`
 ///                   ( `/// _state`     StateField* )?
 ///                   ( `/// _handlers`  Handler*    )?
 ///                 `}`
 ///
-/// Roles have two sections: state and handlers. Interface methods were
-/// dropped — cross-role coordination happens through broadcasts and
+/// Facets have two sections: state and handlers. Interface methods were
+/// dropped — cross-facet coordination happens through broadcasts and
 /// message handlers, not through method-wire bindings.
-fn role_decl_parser<'src, I>(
-) -> impl Parser<'src, I, RoleDecl, extra::Err<Rich<'src, Token, Span>>> + Clone
+fn facet_decl_parser<'src, I>(
+) -> impl Parser<'src, I, FacetDecl, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
@@ -108,10 +108,10 @@ where
         .then(handlers_section)
         .delimited_by(just(Token::LBrace), just(Token::RBrace));
 
-    just(Token::KwRole)
+    just(Token::KwFacet)
         .ignore_then(name)
         .then(body)
-        .map(|(name, (state, handlers))| RoleDecl {
+        .map(|(name, (state, handlers))| FacetDecl {
             name,
             state,
             handlers,
@@ -126,7 +126,7 @@ where
 ///
 /// `InitExpr` is a deliberately small subset of `Expr` (literals, idents,
 /// list literals) — state initializers are declarative defaults at
-/// role-declaration time, not arbitrary computations.
+/// facet-declaration time, not arbitrary computations.
 fn state_field_parser<'src, I>(
 ) -> impl Parser<'src, I, StateField, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -442,27 +442,27 @@ where
     })
 }
 
-/// `ActorDecl` ::= `actor` ident ( `@` ident )? `{`
-///                    IoSpine* RoleInstance* DispatchDecl*
+/// `SchemeDecl` ::= `scheme` ident ( `@` ident )? `{`
+///                    IoSpine* FacetInstance* DispatchDecl*
 ///                  `}`
 ///
-/// Body sections appear in canonical order: IO spines, then role instances,
+/// Body sections appear in canonical order: IO spines, then facet instances,
 /// then dispatch declarations. Each section is optional. The optional
-/// `@ parent` clause positions this actor in the topology tree.
+/// `@ parent` clause positions this scheme in the topology tree.
 ///
 /// `IoSpine`      := ident `:` `io.<path>`
-/// `RoleInstance` := ident `(` ident_list? `)`
+/// `FacetInstance` := ident `(` ident_list? `)`
 /// `DispatchDecl` := `on` ident `.` ident DispatchMode
-fn actor_decl_parser<'src, I>(
-) -> impl Parser<'src, I, ActorDecl, extra::Err<Rich<'src, Token, Span>>> + Clone
+fn scheme_decl_parser<'src, I>(
+) -> impl Parser<'src, I, SchemeDecl, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
     let segment = select! { Token::Ident(n) => n };
-    let actor_name = select! { Token::Ident(n) => n };
+    let scheme_name = select! { Token::Ident(n) => n };
 
     // IO spine: `name : io.<path>`. The colon distinguishes it from a
-    // role instance (which uses `(`).
+    // facet instance (which uses `(`).
     let io_path = segment
         .clone()
         .separated_by(just(Token::Dot))
@@ -474,8 +474,8 @@ where
         .then(io_path)
         .map(|(name, io_path)| IoSpine { name, io_path });
 
-    // Role instance: `name(io_args)`. The `(` distinguishes it from an IO
-    // spine (which uses `:`). Cross-role coordination happens via broadcasts;
+    // Facet instance: `name(io_args)`. The `(` distinguishes it from an IO
+    // spine (which uses `:`). Cross-facet coordination happens via broadcasts;
     // there are no method-wires to bind anymore.
     let ident_list = segment
         .clone()
@@ -483,13 +483,13 @@ where
         .allow_trailing()
         .collect::<Vec<_>>()
         .delimited_by(just(Token::LParen), just(Token::RParen));
-    let role_instance = segment
+    let facet_instance = segment
         .clone()
         .then(ident_list)
-        .map(|(name, io_args)| RoleInstance { name, io_args });
+        .map(|(name, io_args)| FacetInstance { name, io_args });
 
     // Dispatch decl: `on spine.event <mode>`. The `on` keyword
-    // distinguishes it from a role instance.
+    // distinguishes it from a facet instance.
     let spine_event = segment
         .clone()
         .then_ignore(just(Token::Dot))
@@ -517,7 +517,7 @@ where
     // Body in strict section order, each section marker required when its
     // section has content, absent when empty:
     //   /// _io                 io_spines*
-    //   /// _roles              role_instances*
+    //   /// _facets              facet_instances*
     //   /// _dispatch_scripts   dispatch_decls*
     // Markers REQUIRED when section has content. Absent markers = absent
     // section. No implicit-by-shape fallback.
@@ -525,8 +525,8 @@ where
         .ignore_then(io_spine.repeated().collect::<Vec<_>>())
         .or_not()
         .map(Option::unwrap_or_default);
-    let roles_section = section_marker("roles")
-        .ignore_then(role_instance.repeated().collect::<Vec<_>>())
+    let facets_section = section_marker("facets")
+        .ignore_then(facet_instance.repeated().collect::<Vec<_>>())
         .or_not()
         .map(Option::unwrap_or_default);
     let dispatch_section = section_marker("dispatch_scripts")
@@ -535,21 +535,21 @@ where
         .map(Option::unwrap_or_default);
 
     let body = io_section
-        .then(roles_section)
+        .then(facets_section)
         .then(dispatch_section)
         .delimited_by(just(Token::LBrace), just(Token::RBrace));
 
     let parent_clause = just(Token::At).ignore_then(segment.clone()).or_not();
 
-    just(Token::KwActor)
-        .ignore_then(actor_name)
+    just(Token::KwScheme)
+        .ignore_then(scheme_name)
         .then(parent_clause)
         .then(body)
-        .map(|((name, parent), ((io_spines, role_instances), dispatch))| ActorDecl {
+        .map(|((name, parent), ((io_spines, facet_instances), dispatch))| SchemeDecl {
             name,
             parent,
             io_spines,
-            role_instances,
+            facet_instances,
             dispatch,
         })
 }
@@ -560,7 +560,7 @@ where
 ///                ( `/// _connection_handlers` ConnectionHandler* )?
 ///              `}`
 ///
-/// `io` isn't a reserved keyword — the `io.sim.clock` path syntax in actor
+/// `io` isn't a reserved keyword — the `io.sim.clock` path syntax in scheme
 /// IO spines depends on it being a plain ident. We detect the declaration
 /// form by matching the ident literally.
 ///
@@ -604,7 +604,7 @@ where
         .map(|(name, init)| ConnectionHandler { name, init });
 
     // Sections — markers REQUIRED when the section has content (same rule
-    // as roles and actors). Absent marker = absent section.
+    // as facets and schemes). Absent marker = absent section.
     let interface_section = section_marker("interface")
         .ignore_then(interface_entry.repeated().collect::<Vec<_>>())
         .or_not()
@@ -706,13 +706,13 @@ where
 mod tests {
     use super::*;
 
-    fn first_role(src: &str) -> RoleDecl {
+    fn first_facet(src: &str) -> FacetDecl {
         let m = parse(src).expect("parse");
-        m.roles.into_iter().next().expect("role")
+        m.facets.into_iter().next().expect("facet")
     }
 
     fn handler_body(src: &str) -> Vec<Stmt> {
-        first_role(src)
+        first_facet(src)
             .handlers
             .into_iter()
             .next()
@@ -720,33 +720,33 @@ mod tests {
             .body
     }
 
-    // --- Existing tests (role / interface / state / handler header) ---
+    // --- Existing tests (facet / interface / state / handler header) ---
 
     #[test]
-    fn parses_empty_role() {
-        let r = first_role("role Hunger {}");
+    fn parses_empty_facet() {
+        let r = first_facet("facet Hunger {}");
         assert_eq!(r.name, "Hunger");
         assert!(r.state.is_empty());
         assert!(r.handlers.is_empty());
     }
 
     #[test]
-    fn parses_role_with_one_state_field() {
-        let r = first_role("role Hunger { /// _state level = 0 }");
+    fn parses_facet_with_one_state_field() {
+        let r = first_facet("facet Hunger { /// _state level = 0 }");
         assert_eq!(r.state.len(), 1);
         assert_eq!(r.state[0].name, "level");
         assert_eq!(r.state[0].init, Expr::Int(0));
     }
 
     #[test]
-    fn parses_role_with_multiple_state_fields() {
-        let r = first_role("role X { /// _state traces = 0  count = 0 }");
+    fn parses_facet_with_multiple_state_fields() {
+        let r = first_facet("facet X { /// _state traces = 0  count = 0 }");
         assert_eq!(r.state.len(), 2);
     }
 
     #[test]
     fn parses_state_field_with_optional_type_annotation() {
-        let r = first_role("role X { /// _state mem: Memory.Associative = empty }");
+        let r = first_facet("facet X { /// _state mem: Memory.Associative = empty }");
         assert_eq!(
             r.state[0].ty,
             Some(TypeExpr::Path(vec!["Memory".into(), "Associative".into()]))
@@ -755,26 +755,26 @@ mod tests {
 
     #[test]
     fn parses_state_field_without_type_annotation() {
-        let r = first_role("role X { /// _state level = 0.0 }");
+        let r = first_facet("facet X { /// _state level = 0.0 }");
         assert!(r.state[0].ty.is_none());
         assert_eq!(r.state[0].init, Expr::Float(0.0));
     }
 
     #[test]
-    fn parses_multiple_roles_in_module() {
-        let m = parse("role Hunger {} role Voice {}").expect("parse");
-        assert_eq!(m.roles.len(), 2);
+    fn parses_multiple_facets_in_module() {
+        let m = parse("facet Hunger {} facet Voice {}").expect("parse");
+        assert_eq!(m.facets.len(), 2);
     }
 
     #[test]
     fn skips_leading_and_trailing_comments() {
-        let r = first_role("/// preamble\nrole Hunger {}\n/// trailing\n");
+        let r = first_facet("/// preamble\nfacet Hunger {}\n/// trailing\n");
         assert_eq!(r.name, "Hunger");
     }
 
     #[test]
     fn empty_input_parses_to_empty_module() {
-        assert!(parse("").expect("parse").roles.is_empty());
+        assert!(parse("").expect("parse").facets.is_empty());
     }
 
     #[test]
@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn parses_function_type_in_state_field() {
-        let r = first_role("role X { /// _state f: Cue -> Trace = noop }");
+        let r = first_facet("facet X { /// _state f: Cue -> Trace = noop }");
         assert!(matches!(
             r.state[0].ty,
             Some(TypeExpr::Function { .. })
@@ -793,32 +793,32 @@ mod tests {
 
     #[test]
     fn parses_handler_with_type_only() {
-        let r = first_role("role X { /// _handlers on Tick {} }");
+        let r = first_facet("facet X { /// _handlers on Tick {} }");
         assert_eq!(r.handlers.len(), 1);
         assert_eq!(r.handlers[0].binding, None);
     }
 
     #[test]
     fn parses_handler_with_binding() {
-        let r = first_role("role X { /// _handlers on Cue c {} }");
+        let r = first_facet("facet X { /// _handlers on Cue c {} }");
         assert_eq!(r.handlers[0].binding, Some("c".to_string()));
     }
 
     #[test]
     fn parses_handler_with_dotted_message_type() {
-        let r = first_role("role X { /// _handlers on io.sim.Tick {} }");
+        let r = first_facet("facet X { /// _handlers on io.sim.Tick {} }");
         assert_eq!(r.handlers[0].message_type.len(), 3);
     }
 
     #[test]
     fn handler_without_return_type_has_none() {
-        let r = first_role("role X { /// _handlers on Tick {} }");
+        let r = first_facet("facet X { /// _handlers on Tick {} }");
         assert!(r.handlers[0].return_ty.is_none());
     }
 
     #[test]
     fn parses_handler_with_return_type() {
-        let r = first_role("role X { /// _handlers on Tick -> int { 0 } }");
+        let r = first_facet("facet X { /// _handlers on Tick -> int { 0 } }");
         assert_eq!(
             r.handlers[0].return_ty,
             Some(TypeExpr::Path(vec!["int".into()]))
@@ -827,7 +827,7 @@ mod tests {
 
     #[test]
     fn parses_handler_with_binding_and_return_type() {
-        let r = first_role("role X { /// _handlers on Cue c -> Trace { c } }");
+        let r = first_facet("facet X { /// _handlers on Cue c -> Trace { c } }");
         assert_eq!(r.handlers[0].binding.as_deref(), Some("c"));
         assert_eq!(
             r.handlers[0].return_ty,
@@ -838,7 +838,7 @@ mod tests {
     #[test]
     fn parses_handler_with_complex_return_type() {
         // `[Episode]` as return type — list type.
-        let r = first_role("role X { /// _handlers on Cue c -> [Episode] { [] } }");
+        let r = first_facet("facet X { /// _handlers on Cue c -> [Episode] { [] } }");
         assert!(matches!(
             r.handlers[0].return_ty,
             Some(TypeExpr::List(_))
@@ -849,7 +849,7 @@ mod tests {
     fn parses_handler_with_function_return_type() {
         // Higher-order: handler returns a function. Probably rare but the
         // grammar admits it because `->` is right-assoc in TypeExpr.
-        let r = first_role("role X { /// _handlers on Tick -> int -> int { 0 } }");
+        let r = first_facet("facet X { /// _handlers on Tick -> int -> int { 0 } }");
         assert!(matches!(
             r.handlers[0].return_ty,
             Some(TypeExpr::Function { .. })
@@ -857,24 +857,24 @@ mod tests {
     }
 
     #[test]
-    fn parses_role_with_state_and_handlers() {
-        let src = "role X { /// _state level = 0  /// _handlers on Tick {} }";
-        let r = first_role(src);
+    fn parses_facet_with_state_and_handlers() {
+        let src = "facet X { /// _state level = 0  /// _handlers on Tick {} }";
+        let r = first_facet(src);
         assert_eq!(r.state.len(), 1);
         assert_eq!(r.handlers.len(), 1);
     }
 
     #[test]
     fn parses_multiple_handlers() {
-        let src = "role X { /// _handlers on Tick {} on Cue c {} }";
-        let r = first_role(src);
+        let src = "facet X { /// _handlers on Tick {} on Cue c {} }";
+        let r = first_facet(src);
         assert_eq!(r.handlers.len(), 2);
     }
 
     // --- Expression grammar ---
 
     fn parse_expr_in_handler(src: &str) -> Expr {
-        let body = handler_body(&format!("role X {{ /// _handlers on Tick {{ {src} }} }}"));
+        let body = handler_body(&format!("facet X {{ /// _handlers on Tick {{ {src} }} }}"));
         match body.into_iter().next().expect("statement") {
             Stmt::ExprStmt(e) => e,
             other => panic!("expected ExprStmt, got {other:?}"),
@@ -1036,7 +1036,7 @@ mod tests {
 
     #[test]
     fn parses_state_shift() {
-        let body = handler_body("role X { /// _handlers on Tick { level = level ~> level + 1 } }");
+        let body = handler_body("facet X { /// _handlers on Tick { level = level ~> level + 1 } }");
         let stmt = body.into_iter().next().unwrap();
         match stmt {
             Stmt::Assign { name, value } => {
@@ -1053,7 +1053,7 @@ mod tests {
 
     #[test]
     fn parses_assign_statement() {
-        let body = handler_body("role X { /// _handlers on Tick { x = 1 } }");
+        let body = handler_body("facet X { /// _handlers on Tick { x = 1 } }");
         match &body[0] {
             Stmt::Assign { name, value } => {
                 assert_eq!(name, "x");
@@ -1066,7 +1066,7 @@ mod tests {
     #[test]
     fn parses_multi_statement_handler_body() {
         let body = handler_body(
-            "role X { /// _handlers on Tick { x = 1  y = 2  x } }",
+            "facet X { /// _handlers on Tick { x = 1  y = 2  x } }",
         );
         assert_eq!(body.len(), 3);
         assert!(matches!(body[0], Stmt::Assign { .. }));
@@ -1127,7 +1127,7 @@ mod tests {
 
     #[test]
     fn parses_if_without_else() {
-        let body = handler_body("role X { /// _handlers on Tick { if level > 7 { x = level } } }");
+        let body = handler_body("facet X { /// _handlers on Tick { if level > 7 { x = level } } }");
         match &body[0] {
             Stmt::If { else_body, then_body, .. } => {
                 assert!(else_body.is_none());
@@ -1140,7 +1140,7 @@ mod tests {
     #[test]
     fn parses_if_else() {
         let body = handler_body(
-            "role X { /// _handlers on Tick { if level > 7 { x = 1 } else { x = 0 } } }",
+            "facet X { /// _handlers on Tick { if level > 7 { x = 1 } else { x = 0 } } }",
         );
         match &body[0] {
             Stmt::If { else_body: Some(eb), .. } => {
@@ -1153,7 +1153,7 @@ mod tests {
     #[test]
     fn parses_nested_if() {
         let body = handler_body(
-            "role X { /// _handlers on Tick { if level > 7 { if level > 10 { x = 1 } } } }",
+            "facet X { /// _handlers on Tick { if level > 7 { if level > 10 { x = 1 } } } }",
         );
         if let Stmt::If { then_body, .. } = &body[0] {
             assert!(matches!(then_body[0], Stmt::If { .. }));
@@ -1168,7 +1168,7 @@ mod tests {
 
     #[test]
     fn parses_list_type_in_state() {
-        let r = first_role("role X { /// _state episodes: [Episode] = empty }");
+        let r = first_facet("facet X { /// _state episodes: [Episode] = empty }");
         assert_eq!(
             r.state[0].ty,
             Some(TypeExpr::List(Box::new(TypeExpr::Path(vec!["Episode".into()]))))
@@ -1177,7 +1177,7 @@ mod tests {
 
     #[test]
     fn parses_function_type_returning_list_in_state() {
-        let r = first_role("role X { /// _state f: Cue -> [Trace] = noop }");
+        let r = first_facet("facet X { /// _state f: Cue -> [Trace] = noop }");
         if let Some(TypeExpr::Function { to, .. }) = &r.state[0].ty {
             assert!(matches!(**to, TypeExpr::List(_)));
         } else {
@@ -1190,7 +1190,7 @@ mod tests {
     #[test]
     fn parses_match_with_two_arms() {
         let body = handler_body(
-            "role X { /// _handlers on Stimulus s { match s { Threat -> retreat() Food -> approach() } } }",
+            "facet X { /// _handlers on Stimulus s { match s { Threat -> retreat() Food -> approach() } } }",
         );
         match &body[0] {
             Stmt::ExprStmt(Expr::Match { scrutinee, arms }) => {
@@ -1208,7 +1208,7 @@ mod tests {
     #[test]
     fn parses_wildcard_pattern() {
         let body = handler_body(
-            "role X { /// _handlers on S s { match s { Threat -> retreat() _ -> idle() } } }",
+            "facet X { /// _handlers on S s { match s { Threat -> retreat() _ -> idle() } } }",
         );
         if let Stmt::ExprStmt(Expr::Match { arms, .. }) = &body[0] {
             assert_eq!(arms[1].pattern, Pattern::Wildcard);
@@ -1220,7 +1220,7 @@ mod tests {
     #[test]
     fn parses_dotted_constructor_pattern() {
         let body = handler_body(
-            "role X { /// _handlers on E e { match e { io.sim.Tick -> tick() } } }",
+            "facet X { /// _handlers on E e { match e { io.sim.Tick -> tick() } } }",
         );
         if let Stmt::ExprStmt(Expr::Match { arms, .. }) = &body[0] {
             match &arms[0].pattern {
@@ -1235,7 +1235,7 @@ mod tests {
     #[test]
     fn parses_block_bodied_arm() {
         let body = handler_body(
-            "role X { /// _handlers on S s { match s { Threat -> { x = 1  y = 2 } _ -> 0 } } }",
+            "facet X { /// _handlers on S s { match s { Threat -> { x = 1  y = 2 } _ -> 0 } } }",
         );
         if let Stmt::ExprStmt(Expr::Match { arms, .. }) = &body[0] {
             assert_eq!(arms[0].body.len(), 2);
@@ -1252,7 +1252,7 @@ mod tests {
     #[test]
     fn match_can_be_assigned_to_a_local() {
         let body = handler_body(
-            "role X { /// _handlers on S s { decision = match s { Yes -> 1 No -> 0 } } }",
+            "facet X { /// _handlers on S s { decision = match s { Yes -> 1 No -> 0 } } }",
         );
         match &body[0] {
             Stmt::Assign { name, value: Expr::Match { .. } } => {
@@ -1323,7 +1323,7 @@ mod tests {
 
     #[test]
     fn function_without_effect_clause_has_empty_effects() {
-        let r = first_role("role X { /// _state f: Cue -> Trace = noop }");
+        let r = first_facet("facet X { /// _state f: Cue -> Trace = noop }");
         if let Some(TypeExpr::Function { effects, .. }) = &r.state[0].ty {
             assert!(effects.is_empty());
         } else {
@@ -1333,7 +1333,7 @@ mod tests {
 
     #[test]
     fn parses_single_effect_annotation() {
-        let r = first_role("role X { /// _state fetch: Url -> Response / {io.http} = noop }");
+        let r = first_facet("facet X { /// _state fetch: Url -> Response / {io.http} = noop }");
         if let Some(TypeExpr::Function { effects, .. }) = &r.state[0].ty {
             assert_eq!(effects, &vec![vec!["io".to_string(), "http".to_string()]]);
         } else {
@@ -1343,8 +1343,8 @@ mod tests {
 
     #[test]
     fn parses_multiple_effects() {
-        let r = first_role(
-            "role X { /// _state tick: Unit -> Unit / {io.sim.clock, io.sim.comms} = noop }",
+        let r = first_facet(
+            "facet X { /// _state tick: Unit -> Unit / {io.sim.clock, io.sim.comms} = noop }",
         );
         if let Some(TypeExpr::Function { effects, .. }) = &r.state[0].ty {
             assert_eq!(effects.len(), 2);
@@ -1355,7 +1355,7 @@ mod tests {
 
     #[test]
     fn parses_empty_effect_set_explicitly() {
-        let r = first_role("role X { /// _state f: A -> B / {} = noop }");
+        let r = first_facet("facet X { /// _state f: A -> B / {} = noop }");
         if let Some(TypeExpr::Function { effects, .. }) = &r.state[0].ty {
             assert!(effects.is_empty());
         } else {
@@ -1365,7 +1365,7 @@ mod tests {
 
     #[test]
     fn parses_nested_list_type() {
-        let r = first_role("role X { /// _state matrix: [[int]] = empty }");
+        let r = first_facet("facet X { /// _state matrix: [[int]] = empty }");
         assert_eq!(
             r.state[0].ty,
             Some(TypeExpr::List(Box::new(TypeExpr::List(Box::new(
@@ -1402,37 +1402,37 @@ mod tests {
         }
     }
 
-    // --- Actor declarations ---
+    // --- Scheme declarations ---
 
-    fn first_actor(src: &str) -> ActorDecl {
+    fn first_scheme(src: &str) -> SchemeDecl {
         let m = parse(src).expect("parse");
-        m.actors.into_iter().next().expect("actor")
+        m.schemes.into_iter().next().expect("scheme")
     }
 
     #[test]
-    fn parses_empty_actor() {
-        let a = first_actor("actor mind {}");
+    fn parses_empty_scheme() {
+        let a = first_scheme("scheme mind {}");
         assert_eq!(a.name, "mind");
         assert!(a.parent.is_none());
         assert!(a.io_spines.is_empty());
-        assert!(a.role_instances.is_empty());
+        assert!(a.facet_instances.is_empty());
         assert!(a.dispatch.is_empty());
     }
 
     #[test]
-    fn parses_actor_with_parent() {
-        let a = first_actor("actor mind @ rubberDuck {}");
+    fn parses_scheme_with_parent() {
+        let a = first_scheme("scheme mind @ rubberDuck {}");
         assert_eq!(a.name, "mind");
         assert_eq!(a.parent.as_deref(), Some("rubberDuck"));
     }
 
     #[test]
-    fn parses_actor_with_parent_and_body() {
-        let a = first_actor(
-            "actor mind @ rubberDuck {
+    fn parses_scheme_with_parent_and_body() {
+        let a = first_scheme(
+            "scheme mind @ rubberDuck {
                /// _io
                clock: io.sim.clock
-               /// _roles
+               /// _facets
                hunger(clock)
                /// _dispatch_scripts
                on clock.tick parallel
@@ -1440,14 +1440,14 @@ mod tests {
         );
         assert_eq!(a.parent.as_deref(), Some("rubberDuck"));
         assert_eq!(a.io_spines.len(), 1);
-        assert_eq!(a.role_instances.len(), 1);
+        assert_eq!(a.facet_instances.len(), 1);
         assert_eq!(a.dispatch.len(), 1);
     }
 
     #[test]
-    fn parses_actor_with_io_spines() {
-        let a = first_actor(
-            "actor mind {
+    fn parses_scheme_with_io_spines() {
+        let a = first_scheme(
+            "scheme mind {
                /// _io
                http: io.http.server
                clock: io.sim.clock
@@ -1462,40 +1462,40 @@ mod tests {
     }
 
     #[test]
-    fn parses_role_instance_with_io_args() {
-        let a = first_actor(
-            "actor mind {
+    fn parses_facet_instance_with_io_args() {
+        let a = first_scheme(
+            "scheme mind {
                /// _io
                clock: io.sim.clock
-               /// _roles
+               /// _facets
                hunger(clock)
              }",
         );
-        assert_eq!(a.role_instances.len(), 1);
-        let inst = &a.role_instances[0];
+        assert_eq!(a.facet_instances.len(), 1);
+        let inst = &a.facet_instances[0];
         assert_eq!(inst.name, "hunger");
         assert_eq!(inst.io_args, vec!["clock".to_string()]);
     }
 
     #[test]
-    fn parses_role_instance_with_multiple_io_args() {
-        let a = first_actor(
-            "actor mind {
+    fn parses_facet_instance_with_multiple_io_args() {
+        let a = first_scheme(
+            "scheme mind {
                /// _io
                clock: io.sim.clock
                siblings: io.sim.comms.peer
-               /// _roles
+               /// _facets
                episodicMemory(clock, siblings)
              }",
         );
-        let inst = &a.role_instances[0];
+        let inst = &a.facet_instances[0];
         assert_eq!(inst.io_args, vec!["clock".to_string(), "siblings".to_string()]);
     }
 
     #[test]
     fn parses_dispatch_parallel() {
-        let a = first_actor(
-            "actor mind {
+        let a = first_scheme(
+            "scheme mind {
                /// _io
                clock: io.sim.clock
                /// _dispatch_scripts
@@ -1510,8 +1510,8 @@ mod tests {
 
     #[test]
     fn parses_dispatch_async() {
-        let a = first_actor(
-            "actor mind {
+        let a = first_scheme(
+            "scheme mind {
                /// _io
                siblings: io.sim.comms.peer
                /// _dispatch_scripts
@@ -1523,11 +1523,11 @@ mod tests {
 
     #[test]
     fn parses_dispatch_sequence_with_lowercase_instances() {
-        let a = first_actor(
-            "actor mind {
+        let a = first_scheme(
+            "scheme mind {
                /// _io
                clock: io.sim.clock
-               /// _roles
+               /// _facets
                hunger(clock)
                voice(clock)
                /// _dispatch_scripts
@@ -1543,14 +1543,14 @@ mod tests {
     }
 
     #[test]
-    fn parses_actor_with_all_three_sections() {
-        let a = first_actor(
-            "actor mind {
+    fn parses_scheme_with_all_three_sections() {
+        let a = first_scheme(
+            "scheme mind {
                /// _io
                clock:    io.sim.clock
                siblings: io.sim.comms.peer
 
-               /// _roles
+               /// _facets
                episodicMemory(clock, siblings)
                voice(clock)
                hunger(clock)
@@ -1560,28 +1560,28 @@ mod tests {
              }",
         );
         assert_eq!(a.io_spines.len(), 2);
-        assert_eq!(a.role_instances.len(), 3);
+        assert_eq!(a.facet_instances.len(), 3);
         assert_eq!(a.dispatch.len(), 1);
     }
 
     #[test]
-    fn role_instance_after_dispatch_is_a_parse_error() {
-        // Section order: io, then roles, then dispatch — strict.
-        let src = "actor mind {
+    fn facet_instance_after_dispatch_is_a_parse_error() {
+        // Section order: io, then facets, then dispatch — strict.
+        let src = "scheme mind {
                      /// _io
                      clock: io.sim.clock
                      /// _dispatch_scripts
                      on clock.tick parallel
-                     /// _roles
+                     /// _facets
                      hunger(clock)
                    }";
         assert!(parse(src).is_err());
     }
 
     #[test]
-    fn io_spine_after_role_instance_is_a_parse_error() {
-        let src = "actor mind {
-                     /// _roles
+    fn io_spine_after_facet_instance_is_a_parse_error() {
+        let src = "scheme mind {
+                     /// _facets
                      hunger(clock)
                      /// _io
                      clock: io.sim.clock
@@ -1590,20 +1590,20 @@ mod tests {
     }
 
     #[test]
-    fn module_can_hold_roles_and_actors_together() {
+    fn module_can_hold_facets_and_schemes_together() {
         let m = parse(
-            "role Hunger { /// _state level = 0 }
-             actor mind { /// _io clock: io.sim.clock  /// _roles hunger(clock) }",
+            "facet Hunger { /// _state level = 0 }
+             scheme mind { /// _io clock: io.sim.clock  /// _facets hunger(clock) }",
         )
         .expect("parse");
-        assert_eq!(m.roles.len(), 1);
-        assert_eq!(m.actors.len(), 1);
+        assert_eq!(m.facets.len(), 1);
+        assert_eq!(m.schemes.len(), 1);
     }
 
     #[test]
     fn parses_canonical_hunger_handler() {
         let body = handler_body(
-            "role Hunger {
+            "facet Hunger {
                /// _state
                level = 0
 
@@ -1632,13 +1632,13 @@ mod tests {
     fn parses_empty_record_type() {
         // `{}` as a type — a record with no fields. Mostly useful as a
         // building block; the contract reads `nothing in, nothing out`.
-        let r = first_role("role X { /// _state shape: {} = empty }");
+        let r = first_facet("facet X { /// _state shape: {} = empty }");
         assert_eq!(r.state[0].ty, Some(TypeExpr::Record(vec![])));
     }
 
     #[test]
     fn parses_record_type_with_one_field() {
-        let r = first_role("role X { /// _state shape: {x: int} = empty }");
+        let r = first_facet("facet X { /// _state shape: {x: int} = empty }");
         if let Some(TypeExpr::Record(fields)) = &r.state[0].ty {
             assert_eq!(fields.len(), 1);
             assert_eq!(fields[0].name, "x");
@@ -1650,7 +1650,7 @@ mod tests {
 
     #[test]
     fn parses_record_type_with_multiple_fields() {
-        let r = first_role("role X { /// _state shape: {x: int, y: int, label: string} = empty }");
+        let r = first_facet("facet X { /// _state shape: {x: int, y: int, label: string} = empty }");
         if let Some(TypeExpr::Record(fields)) = &r.state[0].ty {
             assert_eq!(fields.len(), 3);
             assert_eq!(fields[2].name, "label");
@@ -1661,8 +1661,8 @@ mod tests {
 
     #[test]
     fn parses_nested_record_type() {
-        let r = first_role(
-            "role X { /// _state shape: {inner: {x: int}} = empty }",
+        let r = first_facet(
+            "facet X { /// _state shape: {inner: {x: int}} = empty }",
         );
         if let Some(TypeExpr::Record(fields)) = &r.state[0].ty {
             assert!(matches!(fields[0].ty, TypeExpr::Record(_)));
@@ -1774,17 +1774,17 @@ mod tests {
     }
 
     #[test]
-    fn parses_module_with_role_io_and_actor() {
+    fn parses_module_with_facet_io_and_scheme() {
         // The full small-to-large file flow with all three top-level forms.
         let m = parse(
-            "role Hunger { /// _state level = 0 }
+            "facet Hunger { /// _state level = 0 }
              io clock { /// _interface event tick: timestamp }
-             actor mind { /// _io c: io.sim.clock  /// _roles hunger(c) }",
+             scheme mind { /// _io c: io.sim.clock  /// _facets hunger(c) }",
         )
         .expect("parse");
-        assert_eq!(m.roles.len(), 1);
+        assert_eq!(m.facets.len(), 1);
         assert_eq!(m.io_decls.len(), 1);
-        assert_eq!(m.actors.len(), 1);
+        assert_eq!(m.schemes.len(), 1);
     }
 
     #[test]
@@ -1803,13 +1803,13 @@ mod tests {
     #[test]
     fn io_decl_does_not_shadow_io_spine_path() {
         // The presence of an io decl must not interfere with `io.x.y` paths
-        // inside actor spines (the `io` ident is reused there).
+        // inside scheme spines (the `io` ident is reused there).
         let m = parse(
             "io clock { /// _interface event tick: timestamp }
-             actor mind { /// _io c: io.sim.clock }",
+             scheme mind { /// _io c: io.sim.clock }",
         )
         .expect("parse");
         assert_eq!(m.io_decls.len(), 1);
-        assert_eq!(m.actors[0].io_spines[0].io_path, vec!["io", "sim", "clock"]);
+        assert_eq!(m.schemes[0].io_spines[0].io_path, vec!["io", "sim", "clock"]);
     }
 }

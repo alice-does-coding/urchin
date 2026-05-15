@@ -14,17 +14,17 @@ use chumsky::span::SimpleSpan;
 /// which is fine since chumsky's `just(...)` only needs `PartialEq`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    /// `role`
-    KwRole,
-    /// `actor`
-    KwActor,
+    /// `facet`
+    KwFacet,
+    /// `scheme`
+    KwScheme,
     /// `parallel` — dispatch mode
     KwParallel,
     /// `sequence` — dispatch mode (followed by `(A -> B -> C)`)
     KwSequence,
     /// `async` — dispatch mode
     KwAsync,
-    /// `on` — handler header (in roles) and dispatch decl (in actors)
+    /// `on` — handler header (in facets) and dispatch decl (in schemes)
     KwOn,
     /// `if`
     KwIf,
@@ -32,9 +32,9 @@ pub enum Token {
     KwElse,
     /// `match`
     KwMatch,
-    /// `event` — interface entry the io produces (actors handle via `on`)
+    /// `event` — interface entry the io produces (schemes handle via `on`)
     KwEvent,
-    /// `method` — interface entry actors call (synchronous from actor's view)
+    /// `method` — interface entry schemes call (synchronous from scheme's view)
     KwMethod,
     /// PascalCase or snake_case identifier.
     Ident(String),
@@ -88,12 +88,12 @@ pub enum Token {
     Slash,
     /// `.` for module paths
     Dot,
-    /// `@` — actor parent declaration: `actor child @ parent { ... }`
+    /// `@` — scheme parent declaration: `scheme child @ parent { ... }`
     /// reads as "child located at parent" / "the child slot of parent."
     At,
-    /// `/// _<name>` — required section marker inside role and actor bodies.
-    /// e.g. `/// _io`, `/// _roles`, `/// _dispatch_scripts` in actors;
-    /// `/// _interface`, `/// _state`, `/// _handlers` in roles.
+    /// `/// _<name>` — required section marker inside facet and scheme bodies.
+    /// e.g. `/// _io`, `/// _facets`, `/// _dispatch_scripts` in schemes;
+    /// `/// _interface`, `/// _state`, `/// _handlers` in facets.
     /// The name is the leading `_` plus the identifier; lexed without
     /// the leading underscore so the token carries just `"io"`, `"state"`, etc.
     SectionMarker(String),
@@ -109,8 +109,8 @@ pub type Spanned<T> = (T, Span);
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s: &str = match self {
-            Token::KwRole => "role",
-            Token::KwActor => "actor",
+            Token::KwFacet => "facet",
+            Token::KwScheme => "scheme",
             Token::KwOn => "on",
             Token::KwParallel => "parallel",
             Token::KwSequence => "sequence",
@@ -167,8 +167,8 @@ pub fn lex(source: &str) -> Result<Vec<Spanned<Token>>, Vec<Rich<'_, char>>> {
 fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err<Rich<'src, char>>>
 {
     let ident = text::ident().map(|s: &str| match s {
-        "role" => Token::KwRole,
-        "actor" => Token::KwActor,
+        "facet" => Token::KwFacet,
+        "scheme" => Token::KwScheme,
         "on" => Token::KwOn,
         "parallel" => Token::KwParallel,
         "sequence" => Token::KwSequence,
@@ -236,7 +236,7 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
     // `///` opens either a SECTION MARKER (`/// _<name>`) or a regular
     // comment. Both are lexed as tokens; comments are filtered out in
     // `lex()` before they reach the parser. Section markers survive
-    // because they ARE structural — required inside role and actor bodies.
+    // because they ARE structural — required inside facet and scheme bodies.
     //
     // Discriminator: optional inline whitespace, then `_<ident>` = marker;
     // anything else to end of line = comment.
@@ -280,8 +280,8 @@ mod tests {
     }
 
     #[test]
-    fn lexes_role_keyword() {
-        assert_eq!(toks("role"), vec![Token::KwRole]);
+    fn lexes_facet_keyword() {
+        assert_eq!(toks("facet"), vec![Token::KwFacet]);
     }
 
     #[test]
@@ -300,11 +300,11 @@ mod tests {
     }
 
     #[test]
-    fn lexes_role_with_state_field() {
+    fn lexes_facet_with_state_field() {
         assert_eq!(
-            toks("role Hunger { ~ level: int }"),
+            toks("facet Hunger { ~ level: int }"),
             vec![
-                Token::KwRole,
+                Token::KwFacet,
                 Token::Ident("Hunger".into()),
                 Token::LBrace,
                 Token::Tilde,
@@ -319,9 +319,9 @@ mod tests {
     #[test]
     fn skips_line_comments() {
         assert_eq!(
-            toks("/// the urchin's smallest role\nrole Hunger {}"),
+            toks("/// the urchin's smallest facet\nfacet Hunger {}"),
             vec![
-                Token::KwRole,
+                Token::KwFacet,
                 Token::Ident("Hunger".into()),
                 Token::LBrace,
                 Token::RBrace,
@@ -461,8 +461,8 @@ mod tests {
     }
 
     #[test]
-    fn lexes_actor_keyword() {
-        assert_eq!(toks("actor"), vec![Token::KwActor]);
+    fn lexes_scheme_keyword() {
+        assert_eq!(toks("scheme"), vec![Token::KwScheme]);
     }
 
     #[test]
@@ -493,7 +493,7 @@ mod tests {
     fn section_marker_followed_by_code_lexes_cleanly() {
         // After the marker, the next tokens come from the source directly —
         // markers consume the marker name + trailing inline whitespace, NOT
-        // the rest of the line. Lets single-line `role X { /// _handlers on
+        // the rest of the line. Lets single-line `facet X { /// _handlers on
         // Tick {} }` work.
         assert_eq!(
             toks("/// _handlers on tick"),
@@ -509,9 +509,9 @@ mod tests {
     fn regular_comment_still_skipped() {
         // No leading `_` after `///` → comment, filtered out by lex().
         assert_eq!(
-            toks("/// the urchin's smallest role\nrole x {}"),
+            toks("/// the urchin's smallest facet\nfacet x {}"),
             vec![
-                Token::KwRole,
+                Token::KwFacet,
                 Token::Ident("x".into()),
                 Token::LBrace,
                 Token::RBrace,

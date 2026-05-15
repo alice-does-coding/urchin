@@ -8,12 +8,12 @@ _Living draft. Started 2026-05-13. Companion to `DIRECTION.md` (vision) and the 
 0.1. [Architecture](#01-architecture)
 1. Lexical structure _(TBD — see `crates/parser/src/lexer.rs` for current token set)_
 2. Type system _(TBD — see `crates/parser/src/ast.rs` for current `TypeExpr`)_
-3. [Role grammar](#3-role-grammar) — **draft, in lockstep with the parser**
-4. [Actor grammar](#4-actor-grammar) — **sketch**
-5. Wire semantics _(folded into §4 / §6 — actors compose roles, IO carries traffic; no separate wire layer)_
+3. [Facet grammar](#3-facet-grammar) — **draft, in lockstep with the parser**
+4. [Scheme grammar](#4-scheme-grammar) — **sketch**
+5. Wire semantics _(folded into §4 / §6 — schemes compose facets, IO carries traffic; no separate wire layer)_
 6. [IO grammar](#6-io-grammar) — **sketch**
 7. Error & effect model _(TBD — algebraic effects with handlers, see §0.1)_
-8. Stdlib role taxonomy _(TBD)_
+8. Stdlib facet taxonomy _(TBD)_
 9. Worked examples _(TBD — the seed corpus; see `examples/agent.urchin` for the first)_
 10. [Open questions / deferred decisions](#10-open-questions)
 
@@ -23,7 +23,7 @@ _Living draft. Started 2026-05-13. Companion to `DIRECTION.md` (vision) and the 
 
 ### Scope
 
-This document specifies the Urchin language: lexical structure, grammar, type system, semantics, and the IO layer through which actors communicate. It is the authoritative reference for the compiler implementation and for any human or AI writing Urchin code.
+This document specifies the Urchin language: lexical structure, grammar, type system, semantics, and the IO layer through which schemes communicate. It is the authoritative reference for the compiler implementation and for any human or AI writing Urchin code.
 
 ### Status
 
@@ -33,7 +33,7 @@ Living draft. Sections are added and revised in design sessions; each section is
 
 - Vision and design philosophy — see `DIRECTION.md`.
 - Tutorial material — Section 9 (the seed corpus) is reference, not tutorial.
-- Stdlib role _implementations_ — Section 8 specifies their interfaces only; implementations live in `crates/stdlib/`.
+- Stdlib facet _implementations_ — Section 8 specifies their interfaces only; implementations live in `crates/stdlib/`.
 
 ### Grammar conventions
 
@@ -57,27 +57,27 @@ Urchin is structured as **three layers, each locked to one paradigm**, with **ev
 
 | Layer | What it is | Paradigm |
 |---|---|---|
-| **Roles** | Discrete, generic units of state + interface + handlers. No inter-role relations of any kind. | Functional |
-| **Actors** | Bags of composed roles + declared IO spines. The unit with relational mappings (parent/sibling/child topology). All algorithm is emergent from the role mix; no actor-level code. | Kay-original OOP (encapsulation + identity + message-passing, no inheritance) |
-| **IO** | Every operation that crosses an actor's boundary, including agent-to-agent comms. Namespaced as `io.{kind}.*`; tracked as a typed effect with full algebraic-effect handlers. | Telecom (one IO flavor among many) generalized |
+| **Facets** | Discrete, generic units of state + interface + handlers. No inter-facet relations of any kind. | Functional |
+| **Schemes** | Bags of composed facets + declared IO spines. The unit with relational mappings (parent/sibling/child topology). All algorithm is emergent from the facet mix; no scheme-level code. | Kay-original OOP (encapsulation + identity + message-passing, no inheritance) |
+| **IO** | Every operation that crosses an scheme's boundary, including agent-to-agent comms. Namespaced as `io.{kind}.*`; tracked as a typed effect with full algebraic-effect handlers. | Telecom (one IO flavor among many) generalized |
 
-### Roles do not relate to each other
+### Facets do not relate to each other
 
-A role has no parent, no kinship, no inheritance, and no abstract/concrete distinction. Roles are flat building blocks. Composition lives at the actor level. Cross-cutting capabilities (recoverability, observability, etc.) are expressed by composing capability roles into the actor that needs them, not by inheriting capability into a base role.
+A facet has no parent, no kinship, no inheritance, and no abstract/concrete distinction. Facets are flat building blocks. Composition lives at the scheme level. Cross-cutting capabilities (recoverability, observability, etc.) are expressed by composing capability facets into the scheme that needs them, not by inheriting capability into a base facet.
 
-### Actors are minimal
+### Schemes are minimal
 
-An actor declaration carries only:
+An scheme declaration carries only:
 
-1. The roles it composes,
+1. The facets it composes,
 2. The IO spines it declares,
-3. Dispatch declarations when 2+ composed roles handle the same message type.
+3. Dispatch declarations when 2+ composed facets handle the same message type.
 
-There is no actor-level behavior code. Behavior is what the role mix emergently does when IO arrives. Variation between agents in a simulation is variation in role composition.
+There is no scheme-level behavior code. Behavior is what the facet mix emergently does when IO arrives. Variation between agents in a simulation is variation in facet composition.
 
 ### IO is the only boundary
 
-There is no separate "wire" or "bus" mechanism for inter-actor communication. Actor-to-actor traffic is just IO (typically `io.sim.comms.*`), one IO flavor among many.
+There is no separate "wire" or "bus" mechanism for inter-scheme communication. Scheme-to-scheme traffic is just IO (typically `io.sim.comms.*`), one IO flavor among many.
 
 Namespace shape:
 
@@ -90,34 +90,34 @@ Every simulation has a journaled seed. PRNG draws (`io.sim.random.*`) regenerate
 
 ### IO is tracked as an effect
 
-Roles and handlers carry an inferred effect set. A handler that only mutates state has an empty effect set; one that calls `io.sim.comms.send` carries `{io.sim.comms}`; one that calls `io.http.get` carries `{io.http}`. Effects show up in signatures (currently sketched as `T -> U / {effects}`).
+Facets and handlers carry an inferred effect set. A handler that only mutates state has an empty effect set; one that calls `io.sim.comms.send` carries `{io.sim.comms}`; one that calls `io.http.get` carries `{io.http}`. Effects show up in signatures (currently sketched as `T -> U / {effects}`).
 
-Urchin uses **full algebraic effects with handlers** (Koka / Frank / Eff lineage). Any actor or test harness can wrap a sub-region and intercept its effects: mocking is "wrap with a handler that fakes the IO"; sandboxing is "wrap with a handler that rejects forbidden effects." Time-travel debugging via effect replay falls out naturally.
+Urchin uses **full algebraic effects with handlers** (Koka / Frank / Eff lineage). Any scheme or test harness can wrap a sub-region and intercept its effects: mocking is "wrap with a handler that fakes the IO"; sandboxing is "wrap with a handler that rejects forbidden effects." Time-travel debugging via effect replay falls out naturally.
 
 ### Multi-handler dispatch
 
-When 2+ composed roles handle the same message type, the actor MUST specify how they fire — no implicit default. Three modes:
+When 2+ composed facets handle the same message type, the scheme MUST specify how they fire — no implicit default. Three modes:
 
 - `on T parallel` — all handlers fire simultaneously; sealed-state means no races; broadcasts queue for the next step.
 - `on T sequence(A -> B -> C)` — handlers fire in declared order; later handlers see earlier ones' state changes and broadcasts.
 - `on T async` — fire-and-forget, no wait. Deterministic schedule under the hood for replay.
 
-When 0 or 1 composed roles handle a type, no dispatch declaration needed. **0 composed handlers for a possible incoming type is a compile-time error.**
+When 0 or 1 composed facets handle a type, no dispatch declaration needed. **0 composed handlers for a possible incoming type is a compile-time error.**
 
 ---
 
-## 3. Role grammar
+## 3. Facet grammar
 
 _Status: draft, in lockstep with `crates/parser`. Sections marked **(parsed)** are accepted by the current parser; sections marked **(planned)** are designed but not yet implemented._
 
-A **role** is the smallest compositional unit of Urchin. A role corresponds roughly to one cognitive faculty or one cohesive bundle of state-plus-behavior. Roles are assembled into actors (see Section 4); roles do not run on their own. **Roles do not relate to each other** — see §0.1.
+A **facet** is the smallest compositional unit of Urchin. A facet corresponds roughly to one cognitive faculty or one cohesive bundle of state-plus-behavior. Facets are assembled into schemes (see Section 4); facets do not run on their own. **Facets do not relate to each other** — see §0.1.
 
-### 3.1 Structure of a role
+### 3.1 Structure of a facet
 
-A role declaration has up to three sections inside its brace-delimited body, in order:
+A facet declaration has up to three sections inside its brace-delimited body, in order:
 
-1. **Interface** — the methods this role exposes to the actor's IO layer.
-2. **State** — the role's private state, prefixed with `~`.
+1. **Interface** — the methods this facet exposes to the scheme's IO layer.
+2. **State** — the facet's private state, prefixed with `~`.
 3. **Handlers** — `on Message { … }` clauses that respond to incoming messages.
 
 Sections are identified by their syntactic shape (interface = bare `name:`, state = `~ name:`, handler = `on TypePath`) and appear at most once each, in the order above. **Order is enforced** — a state field after a handler is a parse error, not a reorder hint. Empty sections are simply omitted.
@@ -125,13 +125,13 @@ Sections are identified by their syntactic shape (interface = bare `name:`, stat
 ### 3.2 Grammar (EBNF) **(parsed)**
 
 ```ebnf
-role_decl         = 'role' role_name '{'
+facet_decl         = 'facet' facet_name '{'
                       interface_method*
                       state_field*
                       handler*
                     '}'
 
-role_name         = pascal_ident                    // e.g. EpisodicMemory
+facet_name         = pascal_ident                    // e.g. EpisodicMemory
 
 interface_method  = lower_ident ':' type_expr
 state_field       = '~' lower_ident ':' type_expr
@@ -164,7 +164,7 @@ call              = lower_ident '(' (expr (',' expr)*)? ')'
 
 ```ur
 /// from examples/agent.urchin
-role EpisodicMemory {
+facet EpisodicMemory {
   record: Event -> Unit
   recall: Cue -> int
 
@@ -182,11 +182,11 @@ role EpisodicMemory {
 
 ### 3.4 Section-by-section semantics
 
-**Interface methods.** `name: T` declares a method this role exposes. Function-typed methods appear as `name: Arg -> Ret`. The IO layer connects external signals to these methods. There is no separate "implements" relation — a role just exposes what it exposes; an actor composing it may or may not wire the methods through.
+**Interface methods.** `name: T` declares a method this facet exposes. Function-typed methods appear as `name: Arg -> Ret`. The IO layer connects external signals to these methods. There is no separate "implements" relation — a facet just exposes what it exposes; an scheme composing it may or may not wire the methods through.
 
-**State fields.** `~ name: T` declares private state. State is sealed: other roles cannot read or write it directly. The `~` prefix makes state declarations and mutations greppable in one regex AND marks the journal hook point — every `~>` mutation is where the runtime engages reversibility machinery. (Resolved §3.9.B: both reasons — language-level greppability and runtime-level journal hook.)
+**State fields.** `~ name: T` declares private state. State is sealed: other facets cannot read or write it directly. The `~` prefix makes state declarations and mutations greppable in one regex AND marks the journal hook point — every `~>` mutation is where the runtime engages reversibility machinery. (Resolved §3.9.B: both reasons — language-level greppability and runtime-level journal hook.)
 
-**Handlers.** `on T b { … }` declares a handler that runs when a message of type `T` arrives at the actor and dispatch resolves to this role. The optional `b` binds the message to a local name. Inside a handler the body has access to the bound message, the role's state fields (read normally, mutate via `~>`), and pure helper expressions.
+**Handlers.** `on T b { … }` declares a handler that runs when a message of type `T` arrives at the scheme and dispatch resolves to this facet. The optional `b` binds the message to a local name. Inside a handler the body has access to the bound message, the facet's state fields (read normally, mutate via `~>`), and pure helper expressions.
 
 ### 3.5 Handler-body statements **(parsed)**
 
@@ -196,30 +196,30 @@ role EpisodicMemory {
 
 ### 3.6 Naming rules **(planned — not yet enforced by the compiler)**
 
-- **All identifiers are camelCase** — role names, actor names, message types, constructor patterns, broadcast tags, IO spine names, role instance names, methods, fields, handler bindings, locals. PascalCase does not appear in idiomatic Urchin.
+- **All identifiers are camelCase** — facet names, scheme names, message types, constructor patterns, broadcast tags, IO spine names, facet instance names, methods, fields, handler bindings, locals. PascalCase does not appear in idiomatic Urchin.
 - Single-word identifiers are simply lowercase: `hunger`, `voice`, `tick`, `cue`, `episodes`, `mood`, `calm`, `food`.
-- Multi-word identifiers join words with internal capitals: `episodicMemory`, `lastSnapshotAt`, `actorId`, `isSatisfied`.
+- Multi-word identifiers join words with internal capitals: `episodicMemory`, `lastSnapshotAt`, `schemeId`, `isSatisfied`.
 - Predicate methods must begin with `is`, `has`, or `can` (e.g. `isSatisfied`, `hasRoom`, `canRecall`).
 - Methods or fields whose value is a timestamp must end in `At` (`createdAt`, `seenAt`).
-- Identifiers referencing entities by handle must end in `Id` (`actorId`, `traceId`).
+- Identifiers referencing entities by handle must end in `Id` (`schemeId`, `traceId`).
 
-The compiler will treat these as hard syntactic constraints, not lint warnings. Naming carries information (predicates / timestamps / handles), and naming-as-rule turns conventions into free training signal for AI writing or reading Urchin code. The reader infers what kind of thing a name refers to from syntactic position — `role hunger {`, `on tick {`, `match s { calm -> ... }` — not from casing.
+The compiler will treat these as hard syntactic constraints, not lint warnings. Naming carries information (predicates / timestamps / handles), and naming-as-rule turns conventions into free training signal for AI writing or reading Urchin code. The reader infers what kind of thing a name refers to from syntactic position — `facet hunger {`, `on tick {`, `match s { calm -> ... }` — not from casing.
 
-### 3.7 Tests adjacent to a role **(planned)**
+### 3.7 Tests adjacent to a facet **(planned)**
 
-A role may include `test` blocks as a sibling section to handlers. Full grammar deferred to §5 (wire semantics) since tests reuse the same dispatch mechanisms.
+A facet may include `test` blocks as a sibling section to handlers. Full grammar deferred to §5 (wire semantics) since tests reuse the same dispatch mechanisms.
 
 ### 3.8 Typed comments **(planned)**
 
 Three reserved doc-comment forms recognized by the compiler:
 
-- `@invariant cond` — a condition the role maintains across all handler executions.
+- `@invariant cond` — a condition the facet maintains across all handler executions.
 - `@assumes cond` — a precondition about inputs or environment.
 - `@because text` — machine-readable rationale for non-obvious code; surfaced in error messages and LSP hover.
 
 ### 3.9 Open questions
 
-- **3.9.A — Multiple kinship.** **RESOLVED — dissolved.** Roles do not relate to each other (see §0.1). Cross-cutting capabilities are composed at the actor level, not inherited at the role level. The original investigation in `design/multi-kinship.md` is retired.
+- **3.9.A — Multiple kinship.** **RESOLVED — dissolved.** Facets do not relate to each other (see §0.1). Cross-cutting capabilities are composed at the scheme level, not inherited at the facet level. The original investigation in `design/multi-kinship.md` is retired.
 - **3.9.B — Why `~>` distinct from `=`.** **RESOLVED — both reasons.** Greppability at language level + journal hook at runtime level. See §3.4.
 - **3.9.C — Test block syntax.** Open. Defer until handler/IO semantics are stable.
 - **3.9.D — Free-form comment policy.** **RESOLVED — only `///`.** Single-line `///` and multi-line bracketed by `///` markers. No other comment form.
@@ -227,22 +227,22 @@ Three reserved doc-comment forms recognized by the compiler:
 
 ---
 
-## 4. Actor grammar
+## 4. Scheme grammar
 
 _Status: sketch, ahead of the parser._
 
-An actor declaration is intentionally minimal: composed roles, declared IO spines, and (when needed) dispatch declarations. There is no actor-level behavior code.
+An scheme declaration is intentionally minimal: composed facets, declared IO spines, and (when needed) dispatch declarations. There is no scheme-level behavior code.
 
 ### 4.1 Sketched grammar
 
 ```ebnf
-actor_decl   = 'actor' actor_name '{'
-                 role_compose*           // bare PascalCase paths
-                 dispatch_decl*          // only when 2+ roles handle the same type
+scheme_decl   = 'scheme' scheme_name '{'
+                 facet_compose*           // bare PascalCase paths
+                 dispatch_decl*          // only when 2+ facets handle the same type
                  io_spine*               // name : io.<path>
                '}'
 
-role_compose = type_path                 // e.g. Memory.Associative
+facet_compose = type_path                 // e.g. Memory.Associative
 dispatch_decl = 'on' type_path dispatch_mode
 dispatch_mode = 'parallel' | 'async' | 'sequence' '(' type_path ('->' type_path)+ ')'
 io_spine     = lower_ident ':' io_path
@@ -252,7 +252,7 @@ io_path      = 'io' '.' lower_ident ('.' lower_ident)*
 ### 4.2 Sketched example
 
 ```ur
-actor Mind {
+scheme Mind {
   Memory.Associative
   Hunger
   Voice
@@ -269,7 +269,7 @@ actor Mind {
 
 ### 4.3 Composition completeness rule
 
-Compile-time error if any message type the actor can possibly receive — from a declared IO spine OR from a `broadcast` in any composed role — has no composed-role handler.
+Compile-time error if any message type the scheme can possibly receive — from a declared IO spine OR from a `broadcast` in any composed facet — has no composed-facet handler.
 
 ---
 
@@ -303,7 +303,7 @@ A handler can wrap a region of code and intercept all effect operations performe
 Decisions still on the table:
 
 - **Effect-set delimiter** — `{}` vs `[]` vs `<>`. Currently `{}` in sketches; reuses brace glyph but parses unambiguously.
-- **Spatial substrate** — whether actor coordinates are in the language semantics or only in the IDE projection. Three flavors named (substrate / view / hybrid-emergent); not yet locked.
+- **Spatial substrate** — whether scheme coordinates are in the language semantics or only in the IDE projection. Three flavors named (substrate / view / hybrid-emergent); not yet locked.
 - **Performative layer** — whether KQML/FIPA-style performatives (`tell`, `ask`, `subscribe`) are baked into IO templates or are just a vocabulary of template parameters.
 - **Newline significance** — currently the lexer treats all whitespace as insignificant; multi-line expression chains (`traces |>\n  filter(by: c) |>\n  reply`) need either lexer-tracked newlines or a smarter expression parser.
 - **Visibility** — likely no separate modifier needed (state is sealed by `~`, interface methods are public, locals are local). Confirmed only when we hit a case that needs it.

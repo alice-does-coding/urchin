@@ -1,14 +1,14 @@
 //! Execution environment for a single handler invocation.
 //!
 //! Two layers:
-//!   - `RoleState` — persistent state fields owned by a role instance.
+//!   - `FacetState` — persistent state fields owned by a facet instance.
 //!     Survives across handler invocations. `~>` writes to this layer.
 //!   - `Env` — transient local bindings made by `name = expr` statements
 //!     inside a handler body. Lives only for the duration of one handler
 //!     invocation; gone when the handler returns.
 //!
 //! The split mirrors the grammar's two-flavor `=`: a plain assign to a
-//! state-field name updates `RoleState` via `~>`; a plain assign to a
+//! state-field name updates `FacetState` via `~>`; a plain assign to a
 //! fresh name updates `Env`. The interpreter resolves which layer to hit
 //! based on whether the LHS is a known state field.
 
@@ -17,11 +17,11 @@ use std::collections::HashMap;
 use crate::value::Value;
 
 #[derive(Debug, Clone, Default)]
-pub struct RoleState {
+pub struct FacetState {
     fields: HashMap<String, Value>,
 }
 
-impl RoleState {
+impl FacetState {
     pub fn new() -> Self {
         Self::default()
     }

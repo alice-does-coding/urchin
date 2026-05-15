@@ -5,8 +5,8 @@
 //! The five event types in the v1 schema, in roughly the order they
 //! arrive:
 //!
-//!   - `actor_instantiated`  — topology, before any ticks
-//!   - `role_instantiated`   — initial role state
+//!   - `scheme_instantiated`  — topology, before any ticks
+//!   - `facet_instantiated`   — initial facet state
 //!   - `tick`                — section header for everything that follows
 //!   - `state_assign`        — a `~>` swap, shown as `field: old → new`
 //!   - `handler_return`      — the value a handler produced for a message
@@ -60,8 +60,8 @@ fn render_line(out: &mut dyn Write, line: &str, style: &Style, state: &mut Rende
     };
     let kind = event.get("event").and_then(|v| v.as_str()).unwrap_or("?");
     match kind {
-        "actor_instantiated" => render_actor(out, &event, style, state),
-        "role_instantiated" => render_role(out, &event, style, state),
+        "scheme_instantiated" => render_scheme(out, &event, style, state),
+        "facet_instantiated" => render_facet(out, &event, style, state),
         "tick" => render_tick(out, &event, style, state),
         "state_assign" => render_state_assign(out, &event, style),
         "handler_return" => render_handler_return(out, &event, style),
@@ -78,30 +78,30 @@ fn ensure_topology_header(out: &mut dyn Write, style: &Style, state: &mut Render
     }
 }
 
-fn render_actor(out: &mut dyn Write, e: &Json, style: &Style, state: &mut RenderState) {
+fn render_scheme(out: &mut dyn Write, e: &Json, style: &Style, state: &mut RenderState) {
     ensure_topology_header(out, style, state);
-    let actor = s(e, "actor");
+    let scheme = s(e, "scheme");
     let parent = e.get("parent").and_then(|v| v.as_str());
     match parent {
         Some(p) => {
             let _ = writeln!(
                 out,
                 "  {} {} {} {}",
-                style.dim("actor"),
-                style.actor(actor),
+                style.dim("scheme"),
+                style.scheme(scheme),
                 style.dim("@"),
-                style.actor(p),
+                style.scheme(p),
             );
         }
         None => {
-            let _ = writeln!(out, "  {} {}", style.dim("actor"), style.actor(actor));
+            let _ = writeln!(out, "  {} {}", style.dim("scheme"), style.scheme(scheme));
         }
     }
 }
 
-fn render_role(out: &mut dyn Write, e: &Json, style: &Style, state: &mut RenderState) {
+fn render_facet(out: &mut dyn Write, e: &Json, style: &Style, state: &mut RenderState) {
     ensure_topology_header(out, style, state);
-    let actor = s(e, "actor");
+    let scheme = s(e, "scheme");
     let instance = s(e, "instance");
     let state_str = e
         .get("state")
@@ -111,8 +111,8 @@ fn render_role(out: &mut dyn Write, e: &Json, style: &Style, state: &mut RenderS
     let _ = writeln!(
         out,
         "    {} {}{}{} {}",
-        style.dim("role"),
-        style.actor(actor),
+        style.dim("facet"),
+        style.scheme(scheme),
         style.dim("."),
         style.instance(instance),
         state_str,
@@ -224,7 +224,7 @@ impl Style {
 
     fn dim(&self, s: &str) -> String { self.wrap("2", s) }
     fn section(&self, s: &str) -> String { self.wrap("1;36", &format!("── {s} ──")) }
-    fn actor(&self, s: &str) -> String { self.wrap("36", s) }
+    fn scheme(&self, s: &str) -> String { self.wrap("36", s) }
     fn instance(&self, s: &str) -> String { self.wrap("35", s) }
     fn field(&self, s: &str) -> String { self.wrap("33", s) }
     fn message(&self, s: &str) -> String { self.wrap("33", s) }
@@ -251,22 +251,22 @@ mod tests {
     #[test]
     fn renders_topology_then_tick() {
         let out = render(&[
-            r#"{"event":"actor_instantiated","actor":"creativePersona","parent":"rubberDuck"}"#,
-            r#"{"event":"role_instantiated","actor":"creativePersona","instance":"photographer","state":[["shotsTaken",0]]}"#,
-            r#"{"event":"actor_instantiated","actor":"rubberDuck","parent":null}"#,
+            r#"{"event":"scheme_instantiated","scheme":"creativePersona","parent":"rubberDuck"}"#,
+            r#"{"event":"facet_instantiated","scheme":"creativePersona","instance":"photographer","state":[["shotsTaken",0]]}"#,
+            r#"{"event":"scheme_instantiated","scheme":"rubberDuck","parent":null}"#,
             r#"{"event":"tick","n":0}"#,
         ]);
         assert!(out.contains("── topology ──"));
-        assert!(out.contains("actor creativePersona @ rubberDuck"));
-        assert!(out.contains("actor rubberDuck"));
-        assert!(out.contains("role creativePersona.photographer"));
+        assert!(out.contains("scheme creativePersona @ rubberDuck"));
+        assert!(out.contains("scheme rubberDuck"));
+        assert!(out.contains("facet creativePersona.photographer"));
         assert!(out.contains("shotsTaken=0"));
         assert!(out.contains("── tick 0 ──"));
     }
 
     #[test]
     fn renders_state_assign_with_old_new_arrow() {
-        let out = render(&[r#"{"event":"state_assign","actor":"creativePersona","instance":"photographer","field":"shotsTaken","old":0,"new":1}"#]);
+        let out = render(&[r#"{"event":"state_assign","scheme":"creativePersona","instance":"photographer","field":"shotsTaken","old":0,"new":1}"#]);
         assert!(out.contains("photographer"));
         assert!(out.contains("shotsTaken"));
         assert!(out.contains("0"));
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn renders_handler_return_with_arrow() {
-        let out = render(&[r#"{"event":"handler_return","actor":"creativePersona","instance":"photographer","message":"tick","value":1}"#]);
+        let out = render(&[r#"{"event":"handler_return","scheme":"creativePersona","instance":"photographer","message":"tick","value":1}"#]);
         assert!(out.contains("photographer.tick"));
         assert!(out.contains("⇒"));
         assert!(out.contains("1"));
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn handler_return_with_unit_value() {
-        let out = render(&[r#"{"event":"handler_return","actor":"a","instance":"i","message":"m","value":null}"#]);
+        let out = render(&[r#"{"event":"handler_return","scheme":"a","instance":"i","message":"m","value":null}"#]);
         assert!(out.contains("()"));
     }
 
@@ -305,27 +305,27 @@ mod tests {
         // Same value old & new: the `if`-guarded re-fire pattern from
         // garden_arcade.urchin. Arrow should be absent so it never lies
         // about change.
-        let out = render(&[r#"{"event":"state_assign","actor":"feedUser","instance":"poster","field":"isHot","old":1,"new":1}"#]);
+        let out = render(&[r#"{"event":"state_assign","scheme":"feedUser","instance":"poster","field":"isHot","old":1,"new":1}"#]);
         assert!(out.contains("isHot = 1"));
         assert!(!out.contains("→"));
     }
 
     #[test]
     fn changed_state_assign_still_uses_arrow() {
-        let out = render(&[r#"{"event":"state_assign","actor":"feedUser","instance":"poster","field":"isHot","old":0,"new":1}"#]);
+        let out = render(&[r#"{"event":"state_assign","scheme":"feedUser","instance":"poster","field":"isHot","old":0,"new":1}"#]);
         assert!(out.contains("→"));
     }
 
     #[test]
     fn handler_return_uses_single_space_around_arrow() {
-        let out = render(&[r#"{"event":"handler_return","actor":"a","instance":"poster","message":"tick","value":1}"#]);
+        let out = render(&[r#"{"event":"handler_return","scheme":"a","instance":"poster","message":"tick","value":1}"#]);
         // No double spaces in the rendered line.
         assert!(!out.contains("  ⇒"), "unexpected double space before arrow: {out:?}");
     }
 
     #[test]
     fn string_value_is_quoted() {
-        let out = render(&[r#"{"event":"handler_return","actor":"a","instance":"i","message":"m","value":"hello"}"#]);
+        let out = render(&[r#"{"event":"handler_return","scheme":"a","instance":"i","message":"m","value":"hello"}"#]);
         assert!(out.contains("\"hello\""));
     }
 }

@@ -4,23 +4,23 @@
 /// messages need them. The shape here mirrors SPEC.md §3.
 
 /// A `Module` holds the top-level declarations from one source file.
-/// Roles, actors, and io declarations can appear in any order.
+/// Facets, schemes, and io declarations can appear in any order.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Module {
-    pub roles: Vec<RoleDecl>,
-    pub actors: Vec<ActorDecl>,
+    pub facets: Vec<FacetDecl>,
+    pub schemes: Vec<SchemeDecl>,
     pub io_decls: Vec<IoDecl>,
 }
 
 /// `io <name> { _interface ... _api_contracts ... _connection_handlers ... }`
 ///
-/// Declares an io module — the typed contract between actors and an
+/// Declares an io module — the typed contract between schemes and an
 /// underlying API/SDK/network thing. Pure declarative; the runtime
 /// synthesizes the implementation from interface + api_contracts +
 /// connection config.
 ///
-/// Three sections, parallel to actor/role section taxonomy:
-///   - `_interface`           — what actors see (event/method entries)
+/// Three sections, parallel to scheme/facet section taxonomy:
+///   - `_interface`           — what schemes see (event/method entries)
 ///   - `_api_contracts`       — wire-format record types (internal)
 ///   - `_connection_handlers` — config values for the connection
 #[derive(Debug, Clone, PartialEq)]
@@ -34,9 +34,9 @@ pub struct IoDecl {
 /// One entry in an io's `_interface` section.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IoInterfaceEntry {
-    /// `event name: ResultType` — the io produces this; actors handle via `on`.
+    /// `event name: ResultType` — the io produces this; schemes handle via `on`.
     Event { name: String, ty: TypeExpr },
-    /// `method name: ArgType -> ResultType` — actors call this.
+    /// `method name: ArgType -> ResultType` — schemes call this.
     Method { name: String, ty: TypeExpr },
 }
 
@@ -56,35 +56,35 @@ pub struct ConnectionHandler {
     pub init: Expr,
 }
 
-/// An actor declaration. Body has three sections in canonical order:
-/// IO spines first (the substrate), then role instances with their
-/// IO + role-to-role wiring (who's plugged into what), then dispatch
-/// declarations (how races resolve). No actor-level behavior code.
+/// An scheme declaration. Body has three sections in canonical order:
+/// IO spines first (the substrate), then facet instances with their
+/// IO + facet-to-facet wiring (who's plugged into what), then dispatch
+/// declarations (how races resolve). No scheme-level behavior code.
 ///
-/// `parent` (optional) declares the actor's position in the topology
-/// tree: `actor mind @ rubberDuck { ... }` reads as "the mind slot of
-/// rubberDuck." The actor's name is the slot name in its parent.
-/// Root actors (no parent) leave this `None`. Sibling and child
+/// `parent` (optional) declares the scheme's position in the topology
+/// tree: `scheme mind @ rubberDuck { ... }` reads as "the mind slot of
+/// rubberDuck." The scheme's name is the slot name in its parent.
+/// Root schemes (no parent) leave this `None`. Sibling and child
 /// relationships are inferred from the union of all `@` clauses
 /// across a project.
 ///
-/// All identifiers — actor name and parent reference — are camelCase
+/// All identifiers — scheme name and parent reference — are camelCase
 /// per the language convention.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActorDecl {
+pub struct SchemeDecl {
     pub name: String,
     pub parent: Option<String>,
     pub io_spines: Vec<IoSpine>,
-    pub role_instances: Vec<RoleInstance>,
+    pub facet_instances: Vec<FacetInstance>,
     pub dispatch: Vec<DispatchDecl>,
 }
 
-/// `name(io_arg, ...)` — a composed role instance. Parens lists the IO
-/// spines this instance can talk to. Cross-role coordination happens
+/// `name(io_arg, ...)` — a composed facet instance. Parens lists the IO
+/// spines this instance can talk to. Cross-facet coordination happens
 /// through broadcasts and message handlers, not through method-wire
 /// bindings — there are no interface methods to bind anymore.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoleInstance {
+pub struct FacetInstance {
     pub name: String,
     pub io_args: Vec<String>,
 }
@@ -109,7 +109,7 @@ pub enum DispatchMode {
     Parallel,
     Async,
     /// `sequence(a -> b -> c)` — instances fire in declared order. Names
-    /// are role-instance names (lowercase camelCase), not type paths.
+    /// are facet-instance names (lowercase camelCase), not type paths.
     Sequence(Vec<String>),
 }
 
@@ -120,11 +120,11 @@ pub struct IoSpine {
     pub io_path: Vec<String>,
 }
 
-/// A role body has two sections: state, handlers. Each section is optional
+/// A facet body has two sections: state, handlers. Each section is optional
 /// and identified by its `/// _state` / `/// _handlers` marker (or, for
 /// legacy code, by the leading `~` on state fields and `on` on handlers).
 #[derive(Debug, Clone, PartialEq)]
-pub struct RoleDecl {
+pub struct FacetDecl {
     pub name: String,
     pub state: Vec<StateField>,
     pub handlers: Vec<Handler>,

@@ -1,0 +1,14 @@
+/// io_llm.urchin — sketch of an LLM IO declaration.
+///
+/// the interface is the protocol — the shape of data crossing the
+/// boundary. how it's actually implemented is a separate concern
+/// (algebraic effect handlers will resolve it at runtime).
+
+io llm {
+  /// _interface
+  method ask: prompt -> response
+
+  /// _connection_handlers
+  model = "haiku"
+  temperature = 0
+}
