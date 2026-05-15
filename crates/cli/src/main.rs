@@ -10,6 +10,8 @@ use std::process::ExitCode;
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use clap::{Parser, Subcommand};
 
+mod watch;
+
 #[derive(Parser)]
 #[command(name = "urchin", version, about = "The Urchin language toolchain")]
 struct Cli {
@@ -43,6 +45,10 @@ enum Cmd {
         #[arg(long, default_value_t = 10)]
         ticks: u64,
     },
+    /// Pretty-render the NDJSON event stream read from stdin. Pipe
+    /// `urchin run` into this to watch the simulation in human form:
+    /// `urchin run examples/agent.urchin --ticks 5 | urchin watch`.
+    Watch,
 }
 
 fn main() -> ExitCode {
@@ -52,6 +58,7 @@ fn main() -> ExitCode {
         Cmd::Format { file } => run_format(&file),
         Cmd::Check { file } => run_check(&file),
         Cmd::Run { file, ticks } => run_run(&file, ticks),
+        Cmd::Watch => watch::run(),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

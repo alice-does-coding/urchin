@@ -384,6 +384,7 @@ version = "0.0.0"
 dependencies = [
  "ariadne",
  "clap",
+ "serde_json",
  "urchin-parser",
  "urchin-runtime",
  "urchin-types",

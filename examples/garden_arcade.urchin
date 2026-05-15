@@ -1,0 +1,78 @@
+/// garden_arcade.urchin — a Garden Arcade-shaped seed example. GA is
+/// an art-object social media simulation; this seeds three atomic user
+/// behaviors as roles, composed into a feedUser actor on the feed.
+///
+/// the three roles reflect three engagement modes on a social feed:
+///   - poster: writes posts, becomes "hot" past a milestone
+///   - reactor: gives reactions to other people's posts
+///   - lurker: scrolls without engaging
+///
+/// each role advances its counters every tick. all three fire in
+/// parallel because none read each other's state — the sealed-state
+/// invariant of role composition guarantees no race.
+///
+/// file flow is small-to-large: roles first, then feedUser, then feed
+/// at the bottom.
+
+io clock {
+  /// _interface
+  event tick: timestamp
+
+  /// _connection_handlers
+  rate = 60
+}
+
+role poster {
+  /// _state
+  postsWritten = 0
+  isHot = 0
+
+  /// _handlers
+  on tick -> int {
+    postsWritten = postsWritten ~> postsWritten + 1
+    if postsWritten > 2 {
+      isHot = isHot ~> 1
+    }
+    postsWritten
+  }
+}
+
+role reactor {
+  /// _state
+  reactionsGiven = 0
+
+  /// _handlers
+  on tick -> int {
+    reactionsGiven = reactionsGiven ~> reactionsGiven + 2
+    reactionsGiven
+  }
+}
+
+role lurker {
+  /// _state
+  minutesScrolled = 0
+
+  /// _handlers
+  on tick -> int {
+    minutesScrolled = minutesScrolled ~> minutesScrolled + 5
+    minutesScrolled
+  }
+}
+
+actor feedUser @ feed {
+  /// _io
+  clock: io.sim.clock
+
+  /// _roles
+  poster(clock)
+  reactor(clock)
+  lurker(clock)
+
+  /// _dispatch_scripts
+  on clock.tick parallel
+}
+
+actor feed {
+  /// _io
+  peers: io.sim.comms.peer
+}

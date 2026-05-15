@@ -14,3 +14,4 @@ urchin-types = { path = "../types" }
 urchin-runtime = { path = "../runtime" }
 clap = { version = "4", features = ["derive"] }
 ariadne = "0.6"
+serde_json = "1"

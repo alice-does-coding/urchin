@@ -202,6 +202,32 @@ mod tests {
     }
 
     #[test]
+    fn garden_arcade_example_runs_end_to_end() {
+        // The GA-shaped seed corpus example. Three roles compose into a
+        // feedUser; each has different increment rates (1, 2, 5); the
+        // poster has a second state field (`isHot`) that flips via an
+        // `if` guard once postsWritten passes the milestone. Five ticks
+        // lands all three engagement counters at expected totals.
+        let src = std::fs::read_to_string("../../examples/garden_arcade.urchin").expect("read");
+        let mut t = topo(&src);
+        let mut sink = VecSink::default();
+        run_sim(&mut t, 5, &mut sink).expect("sim runs");
+
+        let user = t.actors.iter().find(|a| a.name == "feedUser").expect("feedUser");
+
+        let poster = user.roles.iter().find(|r| r.name == "poster").expect("poster");
+        assert_eq!(poster.state.get("postsWritten"), Some(&Value::Int(5)));
+        // milestone fires once postsWritten > 2 (i.e., starting from the 3rd tick)
+        assert_eq!(poster.state.get("isHot"), Some(&Value::Int(1)));
+
+        let reactor = user.roles.iter().find(|r| r.name == "reactor").expect("reactor");
+        assert_eq!(reactor.state.get("reactionsGiven"), Some(&Value::Int(10)));
+
+        let lurker = user.roles.iter().find(|r| r.name == "lurker").expect("lurker");
+        assert_eq!(lurker.state.get("minutesScrolled"), Some(&Value::Int(25)));
+    }
+
+    #[test]
     fn root_actor_without_clock_spine_does_not_tick() {
         // rubberDuck has io.sim.comms.peer but no io.sim.clock — it
         // shouldn't receive tick events at all. (And it has no roles, so
