@@ -1,0 +1,21 @@
+/// mock_llm.urchin — a tiny in-language handler for io.llm. design
+/// sketch: the parser doesn't have `handler` yet, so this is a shape
+/// proposal, not runnable code.
+///
+/// in-language handlers (written in Urchin, executed by the runtime)
+/// are good for tests, mocks, and sim-only IOs that don't touch the
+/// real world. they have their own state — useful for stub counters,
+/// canned-response carousels, deterministic test doubles.
+///
+/// pairs with io_llm.urchin (the interface).
+
+handler MockLlm for io.llm {
+  /// _state
+  callsServed = 0
+
+  /// _handles
+  ask p {
+    callsServed = callsServed ~> callsServed + 1
+    "ok"
+  }
+}

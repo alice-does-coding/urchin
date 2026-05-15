@@ -12,7 +12,7 @@
 use std::fmt::Write;
 
 use crate::ast::{
-    SchemeDecl, BinOp, CallArg, DispatchMode, Expr, Handler, IoDecl, IoInterfaceEntry, Module,
+    SchemeDecl, BinOp, CallArg, DispatchMode, Expr, Handler, IoDecl, Module,
     Pattern, FacetDecl, FacetInstance, Stmt, TypeExpr,
 };
 
@@ -224,10 +224,11 @@ fn write_dispatch_mode(out: &mut String, mode: &DispatchMode) {
 fn write_io_decl(out: &mut String, io: &IoDecl) {
     write!(out, "io {} {{", io.name).unwrap();
 
-    let has_interface = !io.interface.is_empty();
+    let has_requests = !io.requests.is_empty();
+    let has_events = !io.events.is_empty();
     let has_contracts = !io.api_contracts.is_empty();
-    let has_handlers = !io.connection_handlers.is_empty();
-    let empty = !has_interface && !has_contracts && !has_handlers;
+    let has_config = !io.config.is_empty();
+    let empty = !has_requests && !has_events && !has_contracts && !has_config;
 
     if empty {
         out.push('}');
@@ -235,30 +236,33 @@ fn write_io_decl(out: &mut String, io: &IoDecl) {
     }
 
     out.push('\n');
+    let mut prior_section = false;
 
-    if has_interface {
+    if has_requests {
         write_indent(out, 1);
-        out.push_str("/// _interface\n");
-        for entry in &io.interface {
+        out.push_str("/// _requests\n");
+        for op in &io.requests {
             write_indent(out, 1);
-            match entry {
-                IoInterfaceEntry::Event { name, ty } => {
-                    write!(out, "event {name}: ").unwrap();
-                    write_type(out, ty);
-                }
-                IoInterfaceEntry::Method { name, ty } => {
-                    write!(out, "method {name}: ").unwrap();
-                    write_type(out, ty);
-                }
-            }
+            write_io_operation(out, op);
             out.push('\n');
         }
+        prior_section = true;
+    }
+
+    if has_events {
+        if prior_section { out.push('\n'); }
+        write_indent(out, 1);
+        out.push_str("/// _events\n");
+        for op in &io.events {
+            write_indent(out, 1);
+            write_io_operation(out, op);
+            out.push('\n');
+        }
+        prior_section = true;
     }
 
     if has_contracts {
-        if has_interface {
-            out.push('\n');
-        }
+        if prior_section { out.push('\n'); }
         write_indent(out, 1);
         out.push_str("/// _api_contracts\n");
         for alias in &io.api_contracts {
@@ -267,23 +271,36 @@ fn write_io_decl(out: &mut String, io: &IoDecl) {
             write_type(out, &alias.ty);
             out.push('\n');
         }
+        prior_section = true;
     }
 
-    if has_handlers {
-        if has_interface || has_contracts {
-            out.push('\n');
-        }
+    if has_config {
+        if prior_section { out.push('\n'); }
         write_indent(out, 1);
-        out.push_str("/// _connection_handlers\n");
-        for h in &io.connection_handlers {
+        out.push_str("/// _config\n");
+        for c in &io.config {
             write_indent(out, 1);
-            write!(out, "{} = ", h.name).unwrap();
-            write_expr(out, &h.init, 1);
+            write!(out, "{} = ", c.name).unwrap();
+            write_expr(out, &c.init, 1);
             out.push('\n');
         }
     }
 
     out.push('}');
+}
+
+fn write_io_operation(out: &mut String, op: &crate::ast::IoOperation) {
+    write!(out, "{}(", op.name).unwrap();
+    for (i, arg) in op.args.iter().enumerate() {
+        if i > 0 { out.push_str(", "); }
+        write!(out, "{}: ", arg.name).unwrap();
+        write_type(out, &arg.ty);
+    }
+    out.push(')');
+    if let Some(ret) = &op.return_type {
+        out.push_str(" -> ");
+        write_type(out, ret);
+    }
 }
 
 // --- Statements & expressions ------------------------------------------
@@ -792,9 +809,23 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_io_decl_interface_only() {
+    fn round_trips_io_decl_events_only() {
         round_trip(
-            "io clock { /// _interface event tick: timestamp  method now: unit -> timestamp }",
+            "io clock { /// _events tick(at: timestamp) }",
+        );
+    }
+
+    #[test]
+    fn round_trips_io_decl_requests_only() {
+        round_trip(
+            "io llm { /// _requests ask(prompt: string) -> string }",
+        );
+    }
+
+    #[test]
+    fn round_trips_io_decl_request_no_args() {
+        round_trip(
+            "io camera { /// _requests snapshot() -> image }",
         );
     }
 
@@ -806,21 +837,24 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_io_decl_connection_handlers() {
-        round_trip("io clock { /// _connection_handlers rate = 60  offset = 0 }");
+    fn round_trips_io_decl_config() {
+        round_trip("io clock { /// _config rate = 60  offset = 0 }");
     }
 
     #[test]
     fn round_trips_full_io_decl() {
         round_trip(
             "io anthropic {
-               /// _interface
-               method ask: string -> response
+               /// _requests
+               ask(prompt: string) -> response
+
+               /// _events
+               rateLimited(retryAfter: int)
 
                /// _api_contracts
                response: {text: string, tokens: int}
 
-               /// _connection_handlers
+               /// _config
                endpoint = \"https://api.anthropic.com\"
                retries = 3
              }",
@@ -831,7 +865,7 @@ mod tests {
     fn round_trips_module_with_facet_io_and_scheme() {
         round_trip(
             "facet Hunger { /// _state level = 0 }
-             io clock { /// _interface event tick: timestamp }
+             io clock { /// _events tick(at: timestamp) }
              scheme mind { /// _io c: io.sim.clock  /// _facets hunger(c) }",
         );
     }

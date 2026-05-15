@@ -3,10 +3,10 @@
 /// these would import each other; for now they live as sibling sketches.
 
 io llm {
-  /// _interface
-  method ask: prompt -> response
+  /// _requests
+  ask(prompt: str) -> str
 
-  /// _connection_handlers
+  /// _config
   model = "haiku"
   temperature = 0
 }

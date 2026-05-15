@@ -15,10 +15,10 @@
 /// at the bottom.
 
 io clock {
-  /// _interface
-  event tick: timestamp
+  /// _events
+  tick(at: timestamp)
 
-  /// _connection_handlers
+  /// _config
   rate = 60
 }
 

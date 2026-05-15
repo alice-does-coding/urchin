@@ -32,10 +32,6 @@ pub enum Token {
     KwElse,
     /// `match`
     KwMatch,
-    /// `event` — interface entry the io produces (schemes handle via `on`)
-    KwEvent,
-    /// `method` — interface entry schemes call (synchronous from scheme's view)
-    KwMethod,
     /// PascalCase or snake_case identifier.
     Ident(String),
     /// Integer literal.
@@ -118,8 +114,6 @@ impl fmt::Display for Token {
             Token::KwIf => "if",
             Token::KwElse => "else",
             Token::KwMatch => "match",
-            Token::KwEvent => "event",
-            Token::KwMethod => "method",
             Token::Ident(name) => return write!(f, "{name}"),
             Token::IntLit(n) => return write!(f, "{n}"),
             Token::FloatLit(n) => return write!(f, "{n}"),
@@ -176,8 +170,6 @@ fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err
         "if" => Token::KwIf,
         "else" => Token::KwElse,
         "match" => Token::KwMatch,
-        "event" => Token::KwEvent,
-        "method" => Token::KwMethod,
         other => Token::Ident(other.to_string()),
     });
 
@@ -601,11 +593,13 @@ mod tests {
     }
 
     #[test]
-    fn lexes_event_and_method_keywords() {
-        // io interface-entry keywords — distinct from Ident so the io
-        // decl parser can pattern-match them directly.
-        assert_eq!(toks("event"), vec![Token::KwEvent]);
-        assert_eq!(toks("method"), vec![Token::KwMethod]);
+    fn event_and_method_are_plain_idents() {
+        // After the io decl redesign, `event` and `method` are no longer
+        // reserved — the io decl uses sectional disambiguation
+        // (_requests / _events) instead of inline keywords. So users can
+        // name a facet field or method `event` without trouble.
+        assert_eq!(toks("event"), vec![Token::Ident("event".to_string())]);
+        assert_eq!(toks("method"), vec![Token::Ident("method".to_string())]);
     }
 
     #[test]

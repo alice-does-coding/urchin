@@ -1,0 +1,14 @@
+/// anthropic_llm.urchin — forward declaration of an externally
+/// implemented handler. design sketch.
+///
+/// extern handlers are the bridge to the host language. at runtime
+/// start, the engine looks for a Rust impl registered under the name
+/// `AnthropicLlm` to fulfill io.llm. all real-world IO (HTTP, the LLM
+/// APIs, the filesystem, audio, sensors) lives here — anything the
+/// Urchin interpreter can't and shouldn't implement itself.
+///
+/// no body: the implementation isn't in Urchin. the file is the
+/// contract that says "this handler exists; trust the runtime to
+/// resolve it."
+
+extern handler AnthropicLlm for io.llm

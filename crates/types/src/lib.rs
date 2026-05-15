@@ -302,8 +302,8 @@ mod tests {
     fn spine_with_user_declared_io_passes() {
         let src = "
             io llm {
-              /// _interface
-              method ask: prompt -> response
+              /// _requests
+              ask(prompt: str) -> str
             }
             scheme persona @ root {
               /// _io

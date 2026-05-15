@@ -8,8 +8,8 @@ use chumsky::input::{Input, ValueInput};
 use chumsky::prelude::*;
 
 use crate::ast::{
-    SchemeDecl, BinOp, CallArg, ConnectionHandler, DispatchDecl, DispatchMode, Expr, Handler,
-    IoDecl, IoInterfaceEntry, IoSpine, MatchArm, Module, Pattern, RecordField, FacetDecl,
+    SchemeDecl, BinOp, CallArg, ConfigEntry, DispatchDecl, DispatchMode, Expr, Handler,
+    IoArg, IoDecl, IoOperation, IoSpine, MatchArm, Module, Pattern, RecordField, FacetDecl,
     FacetInstance, SpineEvent, StateField, Stmt, TypeAlias, TypeExpr,
 };
 use crate::lexer::{lex, Span, Token};
@@ -555,18 +555,22 @@ where
 }
 
 /// `IoDecl` ::= `io` Ident `{`
-///                ( `/// _interface`           InterfaceEntry* )?
-///                ( `/// _api_contracts`       TypeAlias*      )?
-///                ( `/// _connection_handlers` ConnectionHandler* )?
+///                ( `/// _requests`      Operation* )?
+///                ( `/// _events`        Operation* )?
+///                ( `/// _api_contracts` TypeAlias* )?
+///                ( `/// _config`        ConfigEntry* )?
 ///              `}`
+///
+/// `Operation` ::= Ident `(` (Ident `:` TypeExpr (`,` Ident `:` TypeExpr)*)? `)` (`->` TypeExpr)?
 ///
 /// `io` isn't a reserved keyword — the `io.sim.clock` path syntax in scheme
 /// IO spines depends on it being a plain ident. We detect the declaration
 /// form by matching the ident literally.
 ///
-/// Pure declarative: no `_impl` section. The runtime synthesizes the
-/// implementation from interface + api_contracts + connection_handlers.
-/// `event` and `method` keywords distinguish the two interface-entry kinds.
+/// Pure declarative: no `_impl` section. Handlers (in-language or extern)
+/// provide the implementation. Section membership (_requests vs _events)
+/// distinguishes call-shape from event-shape; signature presence/absence
+/// of `-> ReturnT` further qualifies.
 fn io_decl_parser<'src, I>(
 ) -> impl Parser<'src, I, IoDecl, extra::Err<Rich<'src, Token, Span>>> + Clone
 where
@@ -575,19 +579,31 @@ where
     let io_kw = select! { Token::Ident(n) if n == "io" => () };
     let name = select! { Token::Ident(n) => n };
 
-    // Interface entry: `event name : TypeExpr` or `method name : TypeExpr`.
-    let entry_name = select! { Token::Ident(n) => n };
-    let event_entry = just(Token::KwEvent)
-        .ignore_then(entry_name)
+    // One arg in an operation signature: `name : TypeExpr`.
+    let arg_name = select! { Token::Ident(n) => n };
+    let io_arg = arg_name
         .then_ignore(just(Token::Colon))
         .then(type_expr_parser())
-        .map(|(name, ty)| IoInterfaceEntry::Event { name, ty });
-    let method_entry = just(Token::KwMethod)
-        .ignore_then(entry_name)
-        .then_ignore(just(Token::Colon))
-        .then(type_expr_parser())
-        .map(|(name, ty)| IoInterfaceEntry::Method { name, ty });
-    let interface_entry = choice((event_entry, method_entry));
+        .map(|(name, ty)| IoArg { name, ty });
+
+    // Operation: `name(arg1: T1, arg2: T2) -> ReturnT` — args optional,
+    // return type optional.
+    let op_name = select! { Token::Ident(n) => n };
+    let op_args = io_arg
+        .clone()
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LParen), just(Token::RParen));
+    let op_return = just(Token::Arrow).ignore_then(type_expr_parser()).or_not();
+    let io_operation = op_name
+        .then(op_args)
+        .then(op_return)
+        .map(|((name, args), return_type)| IoOperation {
+            name,
+            args,
+            return_type,
+        });
 
     // API contract alias: `name : TypeExpr` (typically a record).
     let alias_name = select! { Token::Ident(n) => n };
@@ -596,41 +612,48 @@ where
         .then(type_expr_parser())
         .map(|(name, ty)| TypeAlias { name, ty });
 
-    // Connection handler: `name = init` — same shape as a state init.
-    let handler_name = select! { Token::Ident(n) => n };
-    let connection_handler = handler_name
+    // Config entry: `name = init` — same shape as a state init.
+    let cfg_name = select! { Token::Ident(n) => n };
+    let config_entry = cfg_name
         .then_ignore(just(Token::Equals))
         .then(state_init_parser())
-        .map(|(name, init)| ConnectionHandler { name, init });
+        .map(|(name, init)| ConfigEntry { name, init });
 
-    // Sections — markers REQUIRED when the section has content (same rule
-    // as facets and schemes). Absent marker = absent section.
-    let interface_section = section_marker("interface")
-        .ignore_then(interface_entry.repeated().collect::<Vec<_>>())
+    // Sections — markers REQUIRED when the section has content. Absent
+    // marker = absent section. Order in source is canonical (requests
+    // → events → api_contracts → config); enforced at parse time.
+    let requests_section = section_marker("requests")
+        .ignore_then(io_operation.clone().repeated().collect::<Vec<_>>())
+        .or_not()
+        .map(Option::unwrap_or_default);
+    let events_section = section_marker("events")
+        .ignore_then(io_operation.repeated().collect::<Vec<_>>())
         .or_not()
         .map(Option::unwrap_or_default);
     let contracts_section = section_marker("api_contracts")
         .ignore_then(type_alias.repeated().collect::<Vec<_>>())
         .or_not()
         .map(Option::unwrap_or_default);
-    let connection_section = section_marker("connection_handlers")
-        .ignore_then(connection_handler.repeated().collect::<Vec<_>>())
+    let config_section = section_marker("config")
+        .ignore_then(config_entry.repeated().collect::<Vec<_>>())
         .or_not()
         .map(Option::unwrap_or_default);
 
-    let body = interface_section
+    let body = requests_section
+        .then(events_section)
         .then(contracts_section)
-        .then(connection_section)
+        .then(config_section)
         .delimited_by(just(Token::LBrace), just(Token::RBrace));
 
     io_kw
         .ignore_then(name)
         .then(body)
-        .map(|(name, ((interface, api_contracts), connection_handlers))| IoDecl {
+        .map(|(name, (((requests, events), api_contracts), config))| IoDecl {
             name,
-            interface,
+            requests,
+            events,
             api_contracts,
-            connection_handlers,
+            config,
         })
 }
 
@@ -1682,47 +1705,72 @@ mod tests {
     fn parses_empty_io_decl() {
         let io = first_io("io clock {}");
         assert_eq!(io.name, "clock");
-        assert!(io.interface.is_empty());
+        assert!(io.requests.is_empty());
+        assert!(io.events.is_empty());
         assert!(io.api_contracts.is_empty());
-        assert!(io.connection_handlers.is_empty());
+        assert!(io.config.is_empty());
     }
 
     #[test]
     fn parses_io_decl_with_one_event() {
         let io = first_io(
             "io clock {
-               /// _interface
-               event tick: timestamp
+               /// _events
+               tick(at: timestamp)
              }",
         );
-        assert_eq!(io.interface.len(), 1);
-        match &io.interface[0] {
-            IoInterfaceEntry::Event { name, ty } => {
-                assert_eq!(name, "tick");
-                assert_eq!(ty, &TypeExpr::Path(vec!["timestamp".into()]));
-            }
-            other => panic!("expected Event, got {other:?}"),
-        }
+        assert_eq!(io.events.len(), 1);
+        assert_eq!(io.events[0].name, "tick");
+        assert_eq!(io.events[0].args.len(), 1);
+        assert_eq!(io.events[0].args[0].name, "at");
+        assert_eq!(io.events[0].args[0].ty, TypeExpr::Path(vec!["timestamp".into()]));
+        assert!(io.events[0].return_type.is_none());
     }
 
     #[test]
-    fn parses_io_decl_with_event_and_method() {
+    fn parses_io_decl_with_event_and_request() {
         let io = first_io(
             "io chat {
-               /// _interface
-               event message: string
-               method send: string -> ack
+               /// _requests
+               send(msg: string) -> ack
+
+               /// _events
+               message(payload: string)
              }",
         );
-        assert_eq!(io.interface.len(), 2);
-        assert!(matches!(io.interface[0], IoInterfaceEntry::Event { .. }));
-        match &io.interface[1] {
-            IoInterfaceEntry::Method { name, ty } => {
-                assert_eq!(name, "send");
-                assert!(matches!(ty, TypeExpr::Function { .. }));
-            }
-            other => panic!("expected Method, got {other:?}"),
-        }
+        assert_eq!(io.requests.len(), 1);
+        assert_eq!(io.requests[0].name, "send");
+        assert_eq!(io.requests[0].return_type, Some(TypeExpr::Path(vec!["ack".into()])));
+        assert_eq!(io.events.len(), 1);
+        assert_eq!(io.events[0].name, "message");
+        assert!(io.events[0].return_type.is_none());
+    }
+
+    #[test]
+    fn parses_io_decl_request_with_no_args() {
+        // `snapshot() -> image` — zero-arg request still has parens.
+        let io = first_io(
+            "io camera {
+               /// _requests
+               snapshot() -> image
+             }",
+        );
+        assert_eq!(io.requests.len(), 1);
+        assert!(io.requests[0].args.is_empty());
+        assert_eq!(io.requests[0].return_type, Some(TypeExpr::Path(vec!["image".into()])));
+    }
+
+    #[test]
+    fn parses_io_decl_request_with_multiple_args() {
+        let io = first_io(
+            "io chat {
+               /// _requests
+               post(channel: string, body: string) -> ack
+             }",
+        );
+        assert_eq!(io.requests[0].args.len(), 2);
+        assert_eq!(io.requests[0].args[0].name, "channel");
+        assert_eq!(io.requests[0].args[1].name, "body");
     }
 
     #[test]
@@ -1740,37 +1788,41 @@ mod tests {
     }
 
     #[test]
-    fn parses_io_decl_with_connection_handlers() {
+    fn parses_io_decl_with_config() {
         let io = first_io(
             "io clock {
-               /// _connection_handlers
+               /// _config
                rate = 60
                offset = 0
              }",
         );
-        assert_eq!(io.connection_handlers.len(), 2);
-        assert_eq!(io.connection_handlers[0].name, "rate");
-        assert_eq!(io.connection_handlers[0].init, Expr::Int(60));
+        assert_eq!(io.config.len(), 2);
+        assert_eq!(io.config[0].name, "rate");
+        assert_eq!(io.config[0].init, Expr::Int(60));
     }
 
     #[test]
-    fn parses_full_three_section_io_decl() {
+    fn parses_full_four_section_io_decl() {
         let io = first_io(
             "io anthropic {
-               /// _interface
-               method ask: string -> response
+               /// _requests
+               ask(prompt: string) -> response
+
+               /// _events
+               rateLimited(retryAfter: int)
 
                /// _api_contracts
                response: {text: string, tokens: int}
 
-               /// _connection_handlers
+               /// _config
                endpoint = \"https://api.anthropic.com\"
                retries = 3
              }",
         );
-        assert_eq!(io.interface.len(), 1);
+        assert_eq!(io.requests.len(), 1);
+        assert_eq!(io.events.len(), 1);
         assert_eq!(io.api_contracts.len(), 1);
-        assert_eq!(io.connection_handlers.len(), 2);
+        assert_eq!(io.config.len(), 2);
     }
 
     #[test]
@@ -1778,7 +1830,7 @@ mod tests {
         // The full small-to-large file flow with all three top-level forms.
         let m = parse(
             "facet Hunger { /// _state level = 0 }
-             io clock { /// _interface event tick: timestamp }
+             io clock { /// _events tick(at: timestamp) }
              scheme mind { /// _io c: io.sim.clock  /// _facets hunger(c) }",
         )
         .expect("parse");
@@ -1789,13 +1841,13 @@ mod tests {
 
     #[test]
     fn io_section_order_is_strict() {
-        // contracts before interface should fail — sections must appear
-        // in canonical order (interface, api_contracts, connection_handlers).
+        // contracts before requests should fail — sections must appear
+        // in canonical order (_requests, _events, _api_contracts, _config).
         let src = "io clock {
                      /// _api_contracts
                      foo: int
-                     /// _interface
-                     event tick: timestamp
+                     /// _events
+                     tick(at: timestamp)
                    }";
         assert!(parse(src).is_err());
     }
@@ -1805,7 +1857,7 @@ mod tests {
         // The presence of an io decl must not interfere with `io.x.y` paths
         // inside scheme spines (the `io` ident is reused there).
         let m = parse(
-            "io clock { /// _interface event tick: timestamp }
+            "io clock { /// _events tick(at: timestamp) }
              scheme mind { /// _io c: io.sim.clock }",
         )
         .expect("parse");

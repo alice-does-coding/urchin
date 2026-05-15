@@ -5,10 +5,10 @@
 /// (algebraic effect handlers will resolve it at runtime).
 
 io llm {
-  /// _interface
-  method ask: prompt -> response
+  /// _requests
+  ask(prompt: str) -> str
 
-  /// _connection_handlers
+  /// _config
   model = "haiku"
   temperature = 0
 }

@@ -12,32 +12,46 @@ pub struct Module {
     pub io_decls: Vec<IoDecl>,
 }
 
-/// `io <name> { _interface ... _api_contracts ... _connection_handlers ... }`
+/// `io <name> { _requests ... _events ... _api_contracts ... _config ... }`
 ///
 /// Declares an io module — the typed contract between schemes and an
 /// underlying API/SDK/network thing. Pure declarative; the runtime
-/// synthesizes the implementation from interface + api_contracts +
-/// connection config.
+/// synthesizes the implementation via handlers (in-language or extern).
 ///
-/// Three sections, parallel to scheme/facet section taxonomy:
-///   - `_interface`           — what schemes see (event/method entries)
-///   - `_api_contracts`       — wire-format record types (internal)
-///   - `_connection_handlers` — config values for the connection
+/// Sections (all optional, any order in source; canonical order on
+/// print is requests → events → api_contracts → config):
+///   - `_requests`      — sync request/response calls the scheme makes
+///                        outward; have an optional `-> ResultType`
+///   - `_events`        — fire-and-forget events the world pushes at
+///                        the scheme; facets react via `on`
+///   - `_api_contracts` — wire-format record types (internal)
+///   - `_config`        — config values (model selection, rate, etc.)
 #[derive(Debug, Clone, PartialEq)]
 pub struct IoDecl {
     pub name: String,
-    pub interface: Vec<IoInterfaceEntry>,
+    pub requests: Vec<IoOperation>,
+    pub events: Vec<IoOperation>,
     pub api_contracts: Vec<TypeAlias>,
-    pub connection_handlers: Vec<ConnectionHandler>,
+    pub config: Vec<ConfigEntry>,
 }
 
-/// One entry in an io's `_interface` section.
+/// One operation in an io's `_requests` or `_events` section.
+///
+/// Syntax: `name(arg1: T1, arg2: T2) -> ReturnT` (return arrow optional).
+/// Section membership distinguishes request-shape (sync call/response)
+/// from event-shape (fire-and-forget arrival).
 #[derive(Debug, Clone, PartialEq)]
-pub enum IoInterfaceEntry {
-    /// `event name: ResultType` — the io produces this; schemes handle via `on`.
-    Event { name: String, ty: TypeExpr },
-    /// `method name: ArgType -> ResultType` — schemes call this.
-    Method { name: String, ty: TypeExpr },
+pub struct IoOperation {
+    pub name: String,
+    pub args: Vec<IoArg>,
+    pub return_type: Option<TypeExpr>,
+}
+
+/// `name: TypeExpr` — one positional arg in an io operation signature.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IoArg {
+    pub name: String,
+    pub ty: TypeExpr,
 }
 
 /// `name: TypeExpr` in `_api_contracts` — declares `name` as an alias
@@ -48,10 +62,10 @@ pub struct TypeAlias {
     pub ty: TypeExpr,
 }
 
-/// `name = init` in `_connection_handlers` — config value the runtime
-/// uses to set up the underlying connection.
+/// `name = init` in `_config` — config value the runtime uses to set
+/// up the underlying connection.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ConnectionHandler {
+pub struct ConfigEntry {
     pub name: String,
     pub init: Expr,
 }
